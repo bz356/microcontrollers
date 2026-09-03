@@ -77,6 +77,24 @@ unsigned int adc_val;
 // GPIO to indicate ongoing ISR
 #define ISR_GPIO 2
 
+
+// Keypad pin configurations
+#define BASE_KEYPAD_PIN 9
+#define KEYROWS         4
+#define NUMKEYS         12
+
+#define LED             25
+
+unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
+                                        0x5D, 0x3D, 0x6B, 0x5B, 0x3B,
+                                        0x67, 0x37} ;
+unsigned int scancodes[KEYROWS] = {   0xE, 0xD, 0xB, 0x7} ;
+unsigned int button = 0x70 ;
+
+
+char keytext[40];
+int prev_key = 0;
+
 // Alarm ISR
 static void alarm_irq(void) {
 
@@ -105,6 +123,8 @@ static void alarm_irq(void) {
 
 }
 
+
+
 // ADC thread
 static PT_THREAD (protothread_toggle25(struct pt *pt))
 {
@@ -122,6 +142,53 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
     } 
     // every thread ends with PT_END(pt)
     PT_END(pt);
+}
+
+// This thread runs on core 0
+static PT_THREAD (protothread_keypad(struct pt *pt))
+{
+    // Indicate thread beginning
+    PT_BEGIN(pt) ;
+
+    // Some variables
+    static int i ;
+    static uint32_t keypad ;
+
+    while(1) {
+
+        gpio_put(LED, !gpio_get(LED)) ;
+
+        // Scan the keypad!
+        for (i=0; i<KEYROWS; i++) {
+            // Set a row high
+            gpio_put_masked((0xF << BASE_KEYPAD_PIN),
+                            (scancodes[i] << BASE_KEYPAD_PIN)) ;
+            // Small delay required
+            sleep_us(1) ;
+            // Read the keycode
+            keypad = ((gpio_get_all() >> BASE_KEYPAD_PIN) & 0x7F) ;
+            // Break if button(s) are pressed
+            if ((~keypad) & button) break ;
+        }
+        // If we found a button . . .
+        if ((~keypad) & button) {
+            // Look for a valid keycode.
+            for (i=0; i<NUMKEYS; i++) {
+                if (keypad == keycodes[i]) break ;
+            }
+            // If we don't find one, report invalid keycode
+            if (i==NUMKEYS) (i = -1) ;
+        }
+        // Otherwise, indicate invalid/non-pressed buttons
+        else (i=-1) ;
+
+        // Print key to terminal
+        printf("\n%d", i) ;
+
+        PT_YIELD_usec(30000) ;
+    }
+    // Indicate thread end
+    PT_END(pt) ;
 }
 
 int main(){
@@ -167,8 +234,24 @@ int main(){
     // Schedule first alarm
     timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
 
+    ////////////////// KEYPAD INITS ///////////////////////
+    // Initialize the keypad GPIO's
+    gpio_init_mask((0x7F << BASE_KEYPAD_PIN)) ;
+    gpio_set_dir((BASE_KEYPAD_PIN+4), GPIO_IN);
+    gpio_set_dir((BASE_KEYPAD_PIN+5), GPIO_IN);
+    gpio_set_dir((BASE_KEYPAD_PIN+6), GPIO_IN);
+    // Set row-pins to output
+    gpio_set_dir_out_masked((0xF << BASE_KEYPAD_PIN)) ;
+    // Set all output pins to low
+    gpio_put_masked((0xF << BASE_KEYPAD_PIN), (0xF << BASE_KEYPAD_PIN)) ;
+    // Turn on pulldown resistors for column pins (on by default)
+    gpio_pull_up((BASE_KEYPAD_PIN+4)) ;
+    gpio_pull_up((BASE_KEYPAD_PIN+5)) ;
+    gpio_pull_up((BASE_KEYPAD_PIN+6)) ;
+
   // protothread initialization
   pt_add_thread(protothread_toggle25);
+  pt_add_thread(protothread_keypad) ;
   
   // scheduler initialization
   pt_schedule_start;

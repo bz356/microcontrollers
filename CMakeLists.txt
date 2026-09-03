@@ -39,10 +39,12 @@ target_link_libraries(lab1
     pico_stdlib 
     pico_bootsel_via_double_reset
     pico_sync
+    pico_multicore
     hardware_adc
     hardware_clocks
     hardware_irq
     hardware_spi
+    hardware_dma
     hardware_sync
     hardware_timer
     hardware_vreg
