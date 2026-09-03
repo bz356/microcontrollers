@@ -30,6 +30,7 @@
 #include "hardware/irq.h"
 #include "hardware/spi.h"
 #include "hardware/timer.h"
+#include <stdbool.h>
 
 // protothreads
 #include "pt_cornell_rp2040_v1_4.h"
@@ -84,12 +85,75 @@ unsigned int adc_val;
 #define NUMKEYS         12
 
 #define LED             25
+//#define DEBOUNCE_COUNTER 10
+#define DEBOUNCE_DELAY_US 20000
 
 unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
                                         0x5D, 0x3D, 0x6B, 0x5B, 0x3B,
                                         0x67, 0x37} ;
 unsigned int scancodes[KEYROWS] = {   0xE, 0xD, 0xB, 0x7} ;
 unsigned int button = 0x70 ;
+
+typedef enum DebounceState{
+    NOT_PRESSED,
+    MAYBE_PRESSED,
+    MAYBE_NOT_PRESSED,
+    PRESSED
+} DebounceState;
+
+
+DebounceState debounce_state = NOT_PRESSED;
+
+// debounce function
+void debounce_button(uint32_t keypad) {
+    bool isKeypadPressed = !(keypad == 0x07); 
+    static int possible = 0;
+    
+
+
+    switch (debounce_state) {
+
+        case NOT_PRESSED:
+            if(isKeypadPressed){
+                debounce_state = MAYBE_PRESSED;
+                possible = keypad;
+                sleep_us(DEBOUNCE_DELAY_US);
+            }
+            
+            break;
+
+        case MAYBE_PRESSED:
+            if(keypad == possible){
+                debounce_state = PRESSED;
+            }else{
+                debounce_state = NOT_PRESSED;
+            }
+            
+            break;
+
+        case PRESSED:
+            if(keypad != possible){
+                debounce_state = MAYBE_NOT_PRESSED;
+            }
+            break;
+
+        case MAYBE_NOT_PRESSED:
+            if(keypad == possible){
+                debounce_state = PRESSED;
+            }else{
+                debounce_state = NOT_PRESSED;
+            }
+            break;
+
+        default:
+            // optional safety case
+            debounce_state = NOT_PRESSED;
+            break;
+    }
+}
+
+
+
 
 
 char keytext[40];
@@ -144,6 +208,8 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
     PT_END(pt);
 }
 
+
+
 // This thread runs on core 0
 static PT_THREAD (protothread_keypad(struct pt *pt))
 {
@@ -170,8 +236,12 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             // Break if button(s) are pressed
             if ((~keypad) & button) break ;
         }
+
+        //debounce state machine 
+        debounce_button(keypad);
+
         // If we found a button . . .
-        if ((~keypad) & button) {
+        if (debounce_state == PRESSED && ((~keypad) & button)) {
             // Look for a valid keycode.
             for (i=0; i<NUMKEYS; i++) {
                 if (keypad == keycodes[i]) break ;
