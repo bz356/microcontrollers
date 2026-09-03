@@ -200,7 +200,7 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
 
         // reading and printing ADC value
         adc_val = adc_read();
-        printf("ADC value: %d\n", adc_val);
+        // printf("ADC value: %d\n", adc_val);
 
         PT_YIELD_usec(1000);
     } 
@@ -248,12 +248,13 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             }
             // If we don't find one, report invalid keycode
             if (i==NUMKEYS) (i = -1) ;
+            printf("\n KEPAD: %d", i) ;
         }
         // Otherwise, indicate invalid/non-pressed buttons
         else (i=-1) ;
 
         // Print key to terminal
-        printf("\n%d", i) ;
+        
 
         PT_YIELD_usec(30000) ;
     }
