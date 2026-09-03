@@ -106,7 +106,7 @@ DebounceState debounce_state = NOT_PRESSED;
 
 // debounce function
 void debounce_button(uint32_t keypad) {
-    bool isKeypadPressed = !(keypad == 0x07); 
+    bool isKeypadPressed = (~keypad & 0x70) != 0; 
     static int possible = 0;
     
 
