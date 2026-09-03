@@ -66,7 +66,9 @@ volatile int sin_table[sine_table_size];
 #define SPI_PORT spi0
 
 // SPI data
-uint16_t DAC_data ; // output value
+uint16_t DAC_data; // output value
+
+unsigned int adc_val;
 
 // Alarm interrupt setup
 #define ALARM_NUM 0
@@ -87,9 +89,13 @@ static void alarm_irq(void) {
     // Schedules next alarm
     timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY;
 
+    // scaling ADC value and updating phase_incr_main
+    double freq = (adc_val / 4095.0) * 10000.0;
+    phase_incr_main = (unsigned int)((freq * two32) / Fs);
+
 	// DDS phase and sine table lookup
 	phase_accum_main += phase_incr_main;
-    DAC_data = (DAC_config_chan_B | ((sin_table[phase_accum_main>>24] + 2048) & 0xffff));
+    DAC_data = (DAC_config_chan_A | ((sin_table[phase_accum_main>>24] + 2048) & 0xffff));
 
     // send SPI data
     spi_write16_blocking(SPI_PORT, &DAC_data, 1);
@@ -104,8 +110,6 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
 {
     PT_BEGIN(pt);
 
-    static unsigned int adc_val;
-
     while(1) {
         // toggling GPIO
         gpio_put(LED_PIN, !gpio_get(LED_PIN));
@@ -113,10 +117,6 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
         // reading and printing ADC value
         adc_val = adc_read();
         printf("ADC value: %d\n", adc_val);
-
-        // scaling ADC value and updating phase_incr_main
-        double freq = (adc_val / 4095.0) * 10000.0;
-        phase_incr_main = (unsigned int)((freq * two32) / Fs);
 
         PT_YIELD_usec(100000);
     } 
