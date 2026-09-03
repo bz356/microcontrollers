@@ -49,5 +49,8 @@ target_link_libraries(lab1
     hardware_clocks
     )
 
+pico_enable_stdio_usb(lab1 1)
+pico_enable_stdio_uart(lab1 0)
+
 pico_add_extra_outputs(lab1)
 

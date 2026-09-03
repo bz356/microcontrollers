@@ -118,7 +118,7 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
         adc_val = adc_read();
         printf("ADC value: %d\n", adc_val);
 
-        PT_YIELD_usec(100000);
+        PT_YIELD_usec(1000);
     } 
     // every thread ends with PT_END(pt)
     PT_END(pt);
