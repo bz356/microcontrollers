@@ -92,15 +92,15 @@ unsigned int adc_val;
 #define TIME_SAMPLE (1/SAMPLING_FREQUENCY*1000000)
 #define MAX_SAMPLES         10000
 
-uint16_t recording_one[MAX_SAMPLES]
-uint16_t recording_two[MAX_SAMPLES]
-uint16_t recording_three[MAX_SAMPLES]
-uint16_t recording_four[MAX_SAMPLES]
-uint16_t recording_five[MAX_SAMPLES]
-uint16_t recording_siz[MAX_SAMPLES]
-uint16_t recording_seven[MAX_SAMPLES]
-uint16_t recording_eight[MAX_SAMPLES]
-uint16_t recording_nine[MAX_SAMPLES]
+uint16_t recording_one[MAX_SAMPLES];
+uint16_t recording_two[MAX_SAMPLES];
+uint16_t recording_three[MAX_SAMPLES];
+uint16_t recording_four[MAX_SAMPLES];
+uint16_t recording_five[MAX_SAMPLES];
+uint16_t recording_six[MAX_SAMPLES];
+uint16_t recording_seven[MAX_SAMPLES];
+uint16_t recording_eight[MAX_SAMPLES];
+uint16_t recording_nine[MAX_SAMPLES];
 
 unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
                                         0x5D, 0x3D, 0x6B, 0x5B, 0x3B,
@@ -119,7 +119,7 @@ typedef enum DebounceState{
 DebounceState debounce_state = NOT_PRESSED;
 
 int current_key = 0;
-char keytext[40];
+int playback[9];
 bool recording = false; 
 int prev_key = 0;
 
@@ -154,10 +154,19 @@ static void alarm_irq(void) {
 // ADC thread
 static PT_THREAD (protothread_toggle25(struct pt *pt))
 {
-    static uint64_t previous_time = 0;
+    
     PT_BEGIN(pt);
-
+    static uint64_t previous_time = 0;
     while(1) {
+        bool any_one = false;
+        for (int i = 0; i < 9; i++) {
+            if (playback[i] == 1) {
+                any_one = true;
+                break;
+            }
+        }
+        PT_YIELD_UNTIL(pt, any_one);
+
         // toggling GPIO
         gpio_put(LED_PIN, !gpio_get(LED_PIN));
 
@@ -181,7 +190,7 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
                 case 9: buf = recording_nine  ; break ;
                 default: buf = NULL ; break ; 
             }
-
+            int sample_index = 0;
             if (buf != NULL) {
                 buf[sample_index++] = adc_val ;
             }
@@ -190,6 +199,32 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
 
         PT_YIELD_usec(1000);
     } 
+    // every thread ends with PT_END(pt)
+    PT_END(pt);
+}
+
+static PT_THREAD (protothread_play(struct pt *pt))
+{
+    PT_BEGIN(pt);
+
+    while (1) {
+        PT_YIELD_UNTIL(pt,
+        playback[0] == 0 &&
+        playback[1] == 0 &&
+        playback[2] == 0 &&
+        playback[3] == 0 &&
+        playback[4] == 0 &&
+        playback[5] == 0 &&
+        playback[6] == 0 &&
+        playback[7] == 0 &&
+        playback[8] == 0 &&
+        current_key == 0
+        );
+
+
+    }
+
+    PT_YIELD_usec(1000);
     // every thread ends with PT_END(pt)
     PT_END(pt);
 }
@@ -256,9 +291,9 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
 
 
                     bool valid_record = (i>=1 && i<=9);
-                    if (recording && valid_record) {
-                        printf("Started recording key: %d\n", i);
+                    if (recording && valid_record) { 
                         current_key = i;
+                        printf("Started recording key: %d\n", i);
                     }
 
                     // If we don't find one, report invalid keycode
@@ -293,6 +328,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     if (recording && valid_record) {
                         printf("Stopped recording key: %d\n", i);
                         current_key = 0;
+                        playback[i] = 1;
                     }
                     debounce_state = NOT_PRESSED;
                 }
