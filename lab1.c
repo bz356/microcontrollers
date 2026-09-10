@@ -91,6 +91,8 @@ unsigned int adc_val;
 #define SAMPLING_FREQUENCY  100
 #define TIME_SAMPLE (1/SAMPLING_FREQUENCY*1000000)
 #define MAX_SAMPLES         10000
+#define PLAYBACK_FREQUENCY 100
+#define PLAYBACK_TIME (1/PLAYBACK_FREQUENCY*1000000)
 
 uint16_t recording_one[MAX_SAMPLES];
 uint16_t recording_two[MAX_SAMPLES];
@@ -126,7 +128,8 @@ RecordingState recording_state[10];
 
 DebounceState debounce_state = NOT_PRESSED;
 
-bool recording = false;
+bool recording = false; // for if the asterick is pressed
+uint16_t recording_index = 0;
 int current_key = 0;
 int prev_key = 0;
 
@@ -197,9 +200,9 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
                 case 9: buf = recording_nine  ; break ;
                 default: buf = NULL ; break ; 
             }
-            int sample_index = 0;
+            memset(buf, 0, sizeof(buf));
             if (buf != NULL) {
-                buf[sample_index++] = adc_val ;
+                buf[recording_index++] = adc_val ;
             }
         }
         // printf("ADC value: %d\n", adc_val);
@@ -213,28 +216,42 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
 static PT_THREAD (protothread_play(struct pt *pt))
 {
     PT_BEGIN(pt);
-
+    static uint64_t previous_time = 0;
     while (1) {
         //TODO change to recording_state
         PT_YIELD_UNTIL(pt,
-        playback[0] == 0 &&
-        playback[1] == 0 &&
-        playback[2] == 0 &&
-        playback[3] == 0 &&
-        playback[4] == 0 &&
-        playback[5] == 0 &&
-        playback[6] == 0 &&
-        playback[7] == 0 &&
-        playback[8] == 0 &&
-        current_key == 0
+        recording_state[current_key] != PLAYBACK && current_key != 0
         );
+         
 
+        bool playback = (time_us_64() >= previous_time + PLAYBACK_TIME);
 
+        if (recording_state[current_key] == RECORDING && playback && current_key != 0) {
+            previous_time = time_us_64();
+
+            uint32_t *buf;
+
+            switch (current_key) {
+                case 1: buf = recording_one   ; break ;
+                case 2: buf = recording_two   ; break ;
+                case 3: buf = recording_three ; break ;
+                case 4: buf = recording_four  ; break ;
+                case 5: buf = recording_five  ; break ;
+                case 6: buf = recording_six   ; break ;
+                case 7: buf = recording_seven ; break ;
+                case 8: buf = recording_eight ; break ;
+                case 9: buf = recording_nine  ; break ;
+                default: buf = NULL ; break ; 
+            }
+            if (buf != NULL) {
+                adc_val = buf[recording_index++] ;
+            }
+        }
+
+        PT_YIELD_usec(1000);
+        // every thread ends with PT_END(pt)
+        PT_END(pt);
     }
-
-    PT_YIELD_usec(1000);
-    // every thread ends with PT_END(pt)
-    PT_END(pt);
 }
 
 
@@ -301,13 +318,9 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
 
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) { 
+                        recording_index = 0;
                         recording_state[current_key] = RECORDING;
                         printf("Started recording key: %d\n", i);
-                    }
-
-                    if (recording_state[current_key] == RECORDED) {
-                        recording_state[current_key] = PLAYBACK;
-                        printf("Started playback\n");
                     }
 
                     // If we don't find one, report invalid keycode
@@ -348,7 +361,10 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                         recording = false;
                     }
                     else if (valid_record && recording_state[current_key] == RECORDED) {
+                        recording_index = 0;
                         recording_state[current_key] = PLAYBACK;
+                        printf("Started playback\n");
+
                     }
                     debounce_state = NOT_PRESSED;
                 }
