@@ -88,9 +88,6 @@ unsigned int adc_val;
 //#define DEBOUNCE_COUNTER 10
 //#define DEBOUNCE_DELAY_US 20000
 
-// Set to 0 to silence the raw-scancode diagnostics once the keypad works
-#define KEYPAD_DEBUG    1
-
 unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
                                         0x5D, 0x3D, 0x6B, 0x5B, 0x3B,
                                         0x67, 0x37} ;
@@ -112,9 +109,6 @@ char keytext[40];
 bool recording = false; 
 int prev_key = 0;
 
-// Timestamp of the alarm currently armed
-static uint32_t next_alarm;
-
 // Alarm ISR
 static void alarm_irq(void) {
 
@@ -124,11 +118,12 @@ static void alarm_irq(void) {
     // Clear alarm flag
     hw_clear_bits(&timer_hw->intr, 1u << ALARM_NUM);
 
-    // Schedule next alarm relative to the PREVIOUS alarm, not to "now". Scheduling
-    // from timerawl means any ISR overrun writes a timestamp already in the past,
-    // which re-fires the alarm immediately on exit and starves the scheduler.
-    next_alarm += DELAY;
-    timer_hw->alarm[ALARM_NUM] = next_alarm;
+    // Schedules next alarm
+    timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY;
+
+    // scaling ADC value and updating phase_incr_main
+    double freq = (adc_val / 4095.0) * 10000.0;
+    phase_incr_main = (unsigned int)((freq * two32) / Fs);
 
 	// DDS phase and sine table lookup
 	phase_accum_main += phase_incr_main;
@@ -157,12 +152,6 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
         adc_val = adc_read();
         // printf("ADC value: %d\n", adc_val);
 
-        // Scale ADC value and update phase_incr_main. This lives here rather than
-        // in the ISR: at 50 kHz the ISR has ~20 us, and software double-precision
-        // math eats a large fraction of that. The knob only needs 1 kHz updates.
-        float freq = (adc_val / 4095.0f) * 10000.0f;
-        phase_incr_main = (unsigned int)(freq * ((float)two32 / Fs));
-
         PT_YIELD_usec(1000);
     } 
     // every thread ends with PT_END(pt)
@@ -181,10 +170,6 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
     static int i ;
     static uint32_t keypad ;
     static uint32_t possible ;
-#if KEYPAD_DEBUG
-    static uint32_t last_raw = 0xFFFFFFFF ;
-    static int dbg_count = 0 ;
-#endif
 
     while(1) {
 
@@ -202,21 +187,6 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             // Break if button(s) are pressed
             if ((~keypad) & button) break ;
         }
-
-#if KEYPAD_DEBUG
-        // Report the raw scancode whenever it CHANGES (printing every scan would
-        // flood the port at a 2 ms period). Compare against the tables in the lab
-        // handout: 0x7E/0x7D/0x7B/0x77 are the idle codes for rows 0-3.
-        if (keypad != last_raw) {
-            printf("raw: %02x\n", (unsigned int)keypad) ;
-            last_raw = keypad ;
-        }
-        // 1 Hz heartbeat, so silence tells you the thread is dead rather than idle
-        if (++dbg_count >= 500) {
-            dbg_count = 0 ;
-            printf("scanning, idle raw: %02x\n", (unsigned int)keypad) ;
-        }
-#endif
 
         switch (debounce_state) {
 
@@ -252,8 +222,6 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     // If we don't find one, report invalid keycode
                     if (i==NUMKEYS) (i = -1) ;
                     debounce_state = PRESSED;
-                    printf("KEYPAD: %d\n", i) ;
-
                     printf("\n KEYPAD: %d", i) ;
                 }else{
                     debounce_state = NOT_PRESSED;
@@ -350,8 +318,7 @@ int main(){
     irq_set_enabled(ALARM_IRQ, true);
 
     // Schedule first alarm
-    next_alarm = timer_hw->timerawl + DELAY ;
-    timer_hw->alarm[ALARM_NUM] = next_alarm ;
+    timer_hw->alarm[ALARM_NUM] = timer_hw->timerawl + DELAY ;
 
     ////////////////// KEYPAD INITS ///////////////////////
     // Initialize the keypad GPIO's
