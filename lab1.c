@@ -88,6 +88,20 @@ unsigned int adc_val;
 //#define DEBOUNCE_COUNTER 10
 //#define DEBOUNCE_DELAY_US 20000
 
+#define SAMPLING_FREQUENCY  100
+#define TIME_SAMPLE (1/SAMPLING_FREQUENCY*1000000)
+#define MAX_SAMPLES         10000
+
+uint16_t recording_one[MAX_SAMPLES]
+uint16_t recording_two[MAX_SAMPLES]
+uint16_t recording_three[MAX_SAMPLES]
+uint16_t recording_four[MAX_SAMPLES]
+uint16_t recording_five[MAX_SAMPLES]
+uint16_t recording_siz[MAX_SAMPLES]
+uint16_t recording_seven[MAX_SAMPLES]
+uint16_t recording_eight[MAX_SAMPLES]
+uint16_t recording_nine[MAX_SAMPLES]
+
 unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
                                         0x5D, 0x3D, 0x6B, 0x5B, 0x3B,
                                         0x67, 0x37} ;
@@ -104,7 +118,7 @@ typedef enum DebounceState{
 
 DebounceState debounce_state = NOT_PRESSED;
 
-
+int current_key = 0;
 char keytext[40];
 bool recording = false; 
 int prev_key = 0;
@@ -137,11 +151,10 @@ static void alarm_irq(void) {
 
 }
 
-
-
 // ADC thread
 static PT_THREAD (protothread_toggle25(struct pt *pt))
 {
+    static uint64_t previous_time = 0;
     PT_BEGIN(pt);
 
     while(1) {
@@ -150,6 +163,29 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
 
         // reading and printing ADC value
         adc_val = adc_read();
+        bool sample = (time_us_64() >= previous_time + TIME_SAMPLE);
+        if (recording && sample && current_key != 0) {
+            previous_time = time_us_64();
+
+            uint32_t *buf;
+
+            switch (current_key) {
+                case 1: buf = recording_one   ; break ;
+                case 2: buf = recording_two   ; break ;
+                case 3: buf = recording_three ; break ;
+                case 4: buf = recording_four  ; break ;
+                case 5: buf = recording_five  ; break ;
+                case 6: buf = recording_six   ; break ;
+                case 7: buf = recording_seven ; break ;
+                case 8: buf = recording_eight ; break ;
+                case 9: buf = recording_nine  ; break ;
+                default: buf = NULL ; break ; 
+            }
+
+            if (buf != NULL) {
+                buf[sample_index++] = adc_val ;
+            }
+        }
         // printf("ADC value: %d\n", adc_val);
 
         PT_YIELD_usec(1000);
@@ -222,6 +258,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) {
                         printf("Started recording key: %d\n", i);
+                        current_key = i;
                     }
 
                     // If we don't find one, report invalid keycode
@@ -255,6 +292,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) {
                         printf("Stopped recording key: %d\n", i);
+                        current_key = 0;
                     }
                     debounce_state = NOT_PRESSED;
                 }
