@@ -128,13 +128,17 @@ RecordingState recording_state[15];
 
 DebounceState debounce_state = NOT_PRESSED;
 
+// Global variables 
 bool recording = false; // for if the asterick is pressed
 bool zero_pressed = false;
+
+// Most recently detected keypad key (*=10, 0=11, #=12)
+int current_key = 0;
+int prev_key = 0;
+
 uint16_t recording_index = 0;
 uint16_t playback_index = 0;
 uint16_t recording_lengths[10] = {0};
-int current_key = 0;
-int prev_key = 0;
 
 uint16_t *recording_buf;
 uint16_t *playback_buf;
@@ -167,7 +171,7 @@ static void alarm_irq(void) {
 
 }
 
-// ADC thread
+// ADC thread: THREAD FOR THE SOUND / SLIDER / RECORDING
 static PT_THREAD (protothread_slider_record(struct pt *pt))
 {
     
@@ -181,6 +185,8 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
 
         // reading and printing ADC value
         unsigned int temp_val = adc_read();
+
+        // Checking if 0 is pressed to enable/disable sound
         if (zero_pressed || recording_state[current_key] == PLAYBACK) {
             adc_val = temp_val; 
         }
@@ -190,9 +196,12 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
         
 
         bool sample = (time_us_64() >= previous_time + TIME_SAMPLE);
+
+        // If a number key is being recorded, store slide value at 100Hz
         if (recording_state[current_key] == RECORDING && sample && current_key != 0) {
             previous_time = time_us_64();
             
+            // Store only if buffer is valid and has space 
             if (recording_buf != NULL && recording_index < MAX_SAMPLES) {
                 recording_buf[recording_index++] = temp_val ;
             }
@@ -205,12 +214,13 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
     PT_END(pt);
 }
 
+// PLAYBACK THREAD 
 static PT_THREAD (protothread_play(struct pt *pt))
 {
     PT_BEGIN(pt);
     static uint64_t previous_time = 0;
     while (1) {
-        //TODO change to recording_state
+        // Wait until a valid recorded key enters PLAYBACK mode
         PT_YIELD_UNTIL(pt, recording_state[current_key] == PLAYBACK && 
             current_key != 0 && 
             current_key >= 1 &&
@@ -222,10 +232,12 @@ static PT_THREAD (protothread_play(struct pt *pt))
         if (recording_state[current_key] == PLAYBACK && playback && current_key != 0) {
             previous_time = time_us_64();
 
-            
+            // Send the next saved sample to the synthesis ISR 
             if (playback_buf != NULL && playback_index <= recording_lengths[current_key]) {
                 adc_val = playback_buf[playback_index++] ;
             }
+
+            // End playback once all recorded samples have been used 
             else {
                 recording_state[current_key] = RECORDED;
                 playback_index = 0;
@@ -241,7 +253,7 @@ static PT_THREAD (protothread_play(struct pt *pt))
 }
 
 
-
+// KEYPAD THREAD 
 // This thread runs on core 0
 static PT_THREAD (protothread_keypad(struct pt *pt))
 {
@@ -270,6 +282,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             if ((~keypad) & button) break ;
         }
 
+        // Debounce state machine
         switch (debounce_state) {
 
             case NOT_PRESSED:
@@ -285,13 +298,13 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 if(keypad == possible){
                     
                     
-                    // one button pressed here
                     // Look for a valid keycode.
                     for (i=0; i<NUMKEYS; i++) {
                         if (possible == keycodes[i]) break ;
                     }
                     current_key = i;
-
+                    
+                    // Toggle record mode: '*' = 10 is pressed
                     if (recording && i == 10) {
                         printf("STOPPED RECORDING\n");
                         recording = false;
@@ -301,7 +314,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                         recording = true;
                     }
 
-
+                    // Begin recording if Record Mode is activated 
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) { 
                         recording_index = 0;
@@ -336,33 +349,40 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 if(keypad != possible){
                     debounce_state = MAYBE_NOT_PRESSED;
                 }
-                // bool valid_record = (i>=1 && i<=9);
-                // if (recording && valid_record) {
-                //     printf("Currently recording key: %d\n", i);
-                // }
+                
                 break;
 
-            case MAYBE_NOT_PRESSED:
+            case MAYBE_NOT_PRESSED: // Key is released
                 sleep_ms(20);
                 for (i=0; i<NUMKEYS; i++) {
                     if (possible == keycodes[i]) break ;
                 }
 
+                // Release was just a bounce
                 if(keypad == possible){
                     debounce_state = PRESSED;
                 }
+
+                // Release is confirmed 
                 else {
 
                     bool valid_record = (i>=1 && i<=9);
+
+                    // FINISH RECORDING
                     if (recording && valid_record) {
                         printf("Stopped recording key: %d\n", i);
                         if (recording_state[current_key] == RECORDING) {
+
+                            // Remember length of recording
                             recording_state[current_key] = RECORDED;
                             recording_lengths[current_key] = recording_index;
                         }
+
                         recording = false;
                         
                     }
+
+                    // START PLAYBACK 
                     else if (valid_record && recording_state[current_key] == RECORDED) {
                         playback_index = 0;
                         recording_state[current_key] = PLAYBACK;
@@ -397,23 +417,6 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             debounce_state = NOT_PRESSED;
             break;
     }
-
-
-        // If we found a button . . .
-        // if (debounce_state == PRESSED && ((~keypad) & button)) {
-        //     // Look for a valid keycode.
-        //     for (i=0; i<NUMKEYS; i++) {
-        //         if (keypad == keycodes[i]) break ;
-        //     }
-        //     // If we don't find one, report invalid keycode
-        //     if (i==NUMKEYS) (i = -1) ;
-        //     printf("\n KEPAD: %d", i) ;
-        // }
-        // // Otherwise, indicate invalid/non-pressed buttons
-        // else (i=-1) ;
-
-
-        // Print key to terminal
         
 
         PT_YIELD_usec(30000) ;
