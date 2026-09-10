@@ -33,7 +33,7 @@ project(lab1 C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-add_executable(lab1 keypad.c)
+add_executable(lab1 lab1.c)
 
 target_link_libraries(lab1 
     pico_stdlib 
