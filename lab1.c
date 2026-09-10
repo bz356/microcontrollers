@@ -136,6 +136,7 @@ bool zero_pressed = false;
 int current_key = 0;
 int prev_key = 0;
 
+bool zero_pressed = true;
 uint16_t recording_index = 0;
 uint16_t playback_index = 0;
 uint16_t recording_lengths[10] = {0};
@@ -189,7 +190,10 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
 
         // reading and printing ADC value
         unsigned int temp_val = adc_read();
+
+        // Checking if 0 is pressed to enable/disable sound
         if (zero_pressed || recording_state[current_key] == PLAYBACK) {
+        if (zero_pressed || recording_state[current_key] == PLAYBACK || recording_state[current_key] == RECORDING) {
             adc_val = temp_val; 
         }
         else {
