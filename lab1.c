@@ -86,7 +86,7 @@ unsigned int adc_val;
 
 #define LED             25
 //#define DEBOUNCE_COUNTER 10
-#define DEBOUNCE_DELAY_US 20000
+//#define DEBOUNCE_DELAY_US 20000
 
 unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
                                         0x5D, 0x3D, 0x6B, 0x5B, 0x3B,
@@ -105,52 +105,52 @@ typedef enum DebounceState{
 DebounceState debounce_state = NOT_PRESSED;
 
 // debounce function
-void debounce_button(uint32_t keypad) {
-    bool isKeypadPressed = (~keypad & 0x70) != 0; 
-    static int possible = 0;
+// void debounce_button(uint32_t keypad) {
+//     bool isKeypadPressed = (~keypad & button) != 0; 
+//     static int possible = 0;
     
 
 
-    switch (debounce_state) {
+//     switch (debounce_state) {
 
-        case NOT_PRESSED:
-            if(isKeypadPressed){
-                debounce_state = MAYBE_PRESSED;
-                possible = keypad;
-                sleep_us(DEBOUNCE_DELAY_US);
-            }
+//         case NOT_PRESSED:
+//             if(isKeypadPressed){
+//                 debounce_state = MAYBE_PRESSED;
+//                 possible = keypad;
+//                 sleep_us(DEBOUNCE_DELAY_US);
+//             }
             
-            break;
+//             break;
 
-        case MAYBE_PRESSED:
-            if(keypad == possible){
-                debounce_state = PRESSED;
-            }else{
-                debounce_state = NOT_PRESSED;
-            }
+//         case MAYBE_PRESSED:
+//             if(keypad == possible){
+//                 debounce_state = PRESSED;
+//             }else{
+//                 debounce_state = NOT_PRESSED;
+//             }
             
-            break;
+//             break;
 
-        case PRESSED:
-            if(keypad != possible){
-                debounce_state = MAYBE_NOT_PRESSED;
-            }
-            break;
+//         case PRESSED:
+//             if(keypad != possible){
+//                 debounce_state = MAYBE_NOT_PRESSED;
+//             }
+//             break;
 
-        case MAYBE_NOT_PRESSED:
-            if(keypad == possible){
-                debounce_state = PRESSED;
-            }else{
-                debounce_state = NOT_PRESSED;
-            }
-            break;
+//         case MAYBE_NOT_PRESSED:
+//             if(keypad == possible){
+//                 debounce_state = PRESSED;
+//             }else{
+//                 debounce_state = NOT_PRESSED;
+//             }
+//             break;
 
-        default:
-            // optional safety case
-            debounce_state = NOT_PRESSED;
-            break;
-    }
-}
+//         default:
+//             // optional safety case
+//             debounce_state = NOT_PRESSED;
+//             break;
+//     }
+// }
 
 
 
@@ -219,6 +219,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
     // Some variables
     static int i ;
     static uint32_t keypad ;
+    static uint32_t possible ;
 
     while(1) {
 
@@ -237,21 +238,69 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             if ((~keypad) & button) break ;
         }
 
-        //debounce state machine 
-        debounce_button(keypad);
+        switch (debounce_state) {
+
+            case NOT_PRESSED:
+                if((~keypad) & button){
+                    debounce_state = MAYBE_PRESSED;
+                    possible = keypad;
+                }
+                
+                break;
+
+            case MAYBE_PRESSED:
+                if(keypad == possible){
+                    debounce_state = PRESSED;
+
+                    // one button pressed here
+                    // Look for a valid keycode.
+                    for (i=0; i<NUMKEYS; i++) {
+                        if (possible == keycodes[i]) break ;
+                    }
+                    // If we don't find one, report invalid keycode
+                    if (i==NUMKEYS) (i = -1) ;
+
+                    printf("\n KEYPAD: %d", i) ;
+                }else{
+                    debounce_state = NOT_PRESSED;
+                }
+                
+                break;
+
+            case PRESSED:
+                if(keypad != possible){
+                    debounce_state = MAYBE_NOT_PRESSED;
+                }
+                break;
+
+            case MAYBE_NOT_PRESSED:
+                if(keypad == possible){
+                    debounce_state = PRESSED;
+                }else{
+                    debounce_state = NOT_PRESSED;
+                }
+                break;
+
+        default:
+            // optional safety case
+            debounce_state = NOT_PRESSED;
+            break;
+    }
+
 
         // If we found a button . . .
-        if (debounce_state == PRESSED && ((~keypad) & button)) {
-            // Look for a valid keycode.
-            for (i=0; i<NUMKEYS; i++) {
-                if (keypad == keycodes[i]) break ;
-            }
-            // If we don't find one, report invalid keycode
-            if (i==NUMKEYS) (i = -1) ;
-            printf("\n KEPAD: %d", i) ;
-        }
-        // Otherwise, indicate invalid/non-pressed buttons
-        else (i=-1) ;
+        // if (debounce_state == PRESSED && ((~keypad) & button)) {
+        //     // Look for a valid keycode.
+        //     for (i=0; i<NUMKEYS; i++) {
+        //         if (keypad == keycodes[i]) break ;
+        //     }
+        //     // If we don't find one, report invalid keycode
+        //     if (i==NUMKEYS) (i = -1) ;
+        //     printf("\n KEPAD: %d", i) ;
+        // }
+        // // Otherwise, indicate invalid/non-pressed buttons
+        // else (i=-1) ;
+
 
         // Print key to terminal
         
