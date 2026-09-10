@@ -116,11 +116,18 @@ typedef enum DebounceState{
     PRESSED
 } DebounceState;
 
+typedef enum RecordingState{
+    NOT_RECORDED,
+    RECORDING,
+    RECORDED,
+    PLAYBACK
+} RecordingState;
+RecordingState recording_state[10];
+
 DebounceState debounce_state = NOT_PRESSED;
 
+bool recording = false;
 int current_key = 0;
-int playback[9];
-bool recording = false; 
 int prev_key = 0;
 
 // Alarm ISR
@@ -160,7 +167,7 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
     while(1) {
         bool any_one = false;
         for (int i = 0; i < 9; i++) {
-            if (playback[i] == 1) {
+            if (recording_state[i] >= RECORDED) {
                 any_one = true;
                 break;
             }
@@ -173,7 +180,7 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
         // reading and printing ADC value
         adc_val = adc_read();
         bool sample = (time_us_64() >= previous_time + TIME_SAMPLE);
-        if (recording && sample && current_key != 0) {
+        if (recording_state[current_key] == RECORDING && sample && current_key != 0) {
             previous_time = time_us_64();
 
             uint32_t *buf;
@@ -208,6 +215,7 @@ static PT_THREAD (protothread_play(struct pt *pt))
     PT_BEGIN(pt);
 
     while (1) {
+        //TODO change to recording_state
         PT_YIELD_UNTIL(pt,
         playback[0] == 0 &&
         playback[1] == 0 &&
@@ -279,6 +287,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     for (i=0; i<NUMKEYS; i++) {
                         if (possible == keycodes[i]) break ;
                     }
+                    current_key = i;
 
                     if (recording && i == 10) {
                         printf("STOPPED RECORDING\n");
@@ -292,8 +301,13 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
 
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) { 
-                        current_key = i;
+                        recording_state[current_key] = RECORDING;
                         printf("Started recording key: %d\n", i);
+                    }
+
+                    if (recording_state[current_key] == RECORDED) {
+                        recording_state[current_key] = PLAYBACK;
+                        printf("Started playback\n");
                     }
 
                     // If we don't find one, report invalid keycode
@@ -321,14 +335,20 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 for (i=0; i<NUMKEYS; i++) {
                     if (possible == keycodes[i]) break ;
                 }
+
                 if(keypad == possible){
                     debounce_state = PRESSED;
                 }else{
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) {
                         printf("Stopped recording key: %d\n", i);
-                        current_key = 0;
-                        playback[i] = 1;
+                        if (recording_state[current_key] == RECORDING) {
+                            recording_state[current_key] = RECORDED;
+                        }
+                        recording = false;
+                    }
+                    else if (valid_record && recording_state[current_key] == RECORDED) {
+                        recording_state[current_key] = PLAYBACK;
                     }
                     debounce_state = NOT_PRESSED;
                 }
