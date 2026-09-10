@@ -130,6 +130,8 @@ DebounceState debounce_state = NOT_PRESSED;
 
 bool recording = false; // for if the asterick is pressed
 uint16_t recording_index = 0;
+uint16_t playback_index = 0;
+uint16_t recording_lengths[10] = {0};
 int current_key = 0;
 int prev_key = 0;
 
@@ -165,20 +167,13 @@ static void alarm_irq(void) {
 }
 
 // ADC thread
-static PT_THREAD (protothread_toggle25(struct pt *pt))
+static PT_THREAD (protothread_slider_record(struct pt *pt))
 {
     
     PT_BEGIN(pt);
     static uint64_t previous_time = 0;
     while(1) {
-        bool any_one = false;
-        for (int i = 1; i < 10; i++) {
-            if (recording_state[i] != PLAYBACK) {
-                any_one = true;
-                break;
-            }
-        }
-        PT_YIELD_UNTIL(pt, any_one);
+        PT_YIELD_UNTIL(pt, recording_state[current_key] != PLAYBACK);
 
         // toggling GPIO
         gpio_put(LED_PIN, !gpio_get(LED_PIN));
@@ -207,17 +202,26 @@ static PT_THREAD (protothread_play(struct pt *pt))
     static uint64_t previous_time = 0;
     while (1) {
         //TODO change to recording_state
-        PT_YIELD_UNTIL(pt, recording_state[current_key] == PLAYBACK && current_key != 0);
+        PT_YIELD_UNTIL(pt, recording_state[current_key] == PLAYBACK && 
+            current_key != 0 && 
+            current_key >= 1 &&
+            current_key <= 9 
+        );
          
         bool playback = (time_us_64() >= previous_time + PLAYBACK_TIME);
 
-        if (recording_state[current_key] == RECORDING && playback && current_key != 0) {
+        if (recording_state[current_key] == PLAYBACK && playback && current_key != 0) {
             previous_time = time_us_64();
 
             
-            if (playback_buf != NULL && recording_index < MAX_SAMPLES) {
-                adc_val = playback_buf[recording_index++] ;
+            if (playback_buf != NULL && playback_index <= recording_lengths[current_key]) {
+                adc_val = playback_buf[playback_index++] ;
             }
+            // else {
+            //     recording_state[current_key] = RECORDED;
+            //     playback_index = 0;
+            //     // printf("Finished playback\n");
+            // }
         }
 
         PT_YIELD_usec(1000);
@@ -305,7 +309,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                             case 9: recording_buf = recording_nine  ; break ;
                             default: recording_buf = NULL ; break ; 
                         }
-                        memeset(recording_buf, 0, sizeof(recording_buf));   
+                        // memset(recording_buf, 0, MAX_SAMPLES * sizeof(*recording_buf));   
                         printf("Started recording key: %d\n", i);
                     }
 
@@ -337,17 +341,20 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
 
                 if(keypad == possible){
                     debounce_state = PRESSED;
-                }else{
+                }
+                else {
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) {
                         printf("Stopped recording key: %d\n", i);
                         if (recording_state[current_key] == RECORDING) {
                             recording_state[current_key] = RECORDED;
+                            recording_lengths[current_key] = recording_index;
                         }
                         recording = false;
+                        
                     }
                     else if (valid_record && recording_state[current_key] == RECORDED) {
-                        recording_index = 0;
+                        playback_index = 0;
                         recording_state[current_key] = PLAYBACK;
 
                         switch (current_key) {
@@ -461,7 +468,7 @@ int main(){
     gpio_pull_up((BASE_KEYPAD_PIN+6)) ;
 
   // protothread initialization
-  pt_add_thread(protothread_toggle25);
+  pt_add_thread(protothread_slider_record);
   pt_add_thread(protothread_keypad) ;
   pt_add_thread(protothread_play);
   
