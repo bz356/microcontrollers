@@ -124,11 +124,12 @@ typedef enum RecordingState{
     RECORDED,
     PLAYBACK
 } RecordingState;
-RecordingState recording_state[10];
+RecordingState recording_state[15];
 
 DebounceState debounce_state = NOT_PRESSED;
 
 bool recording = false; // for if the asterick is pressed
+bool zero_pressed = false;
 uint16_t recording_index = 0;
 uint16_t playback_index = 0;
 uint16_t recording_lengths[10] = {0};
@@ -179,7 +180,8 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
         gpio_put(LED_PIN, !gpio_get(LED_PIN));
 
         // reading and printing ADC value
-        adc_val = adc_read();
+        if (zero_pressed) adc_val = adc_read(); else adc_val = 0;
+
         bool sample = (time_us_64() >= previous_time + TIME_SAMPLE);
         if (recording_state[current_key] == RECORDING && sample && current_key != 0) {
             previous_time = time_us_64();
@@ -217,11 +219,11 @@ static PT_THREAD (protothread_play(struct pt *pt))
             if (playback_buf != NULL && playback_index <= recording_lengths[current_key]) {
                 adc_val = playback_buf[playback_index++] ;
             }
-            // else {
-            //     recording_state[current_key] = RECORDED;
-            //     playback_index = 0;
-            //     // printf("Finished playback\n");
-            // }
+            else {
+                recording_state[current_key] = RECORDED;
+                playback_index = 0;
+                printf("Finished playback\n");
+            }
         }
 
         PT_YIELD_usec(1000);
@@ -343,6 +345,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     debounce_state = PRESSED;
                 }
                 else {
+
                     bool valid_record = (i>=1 && i<=9);
                     if (recording && valid_record) {
                         printf("Stopped recording key: %d\n", i);
@@ -372,6 +375,9 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
 
                         printf("Started playback\n");
 
+                    }
+                    else if (current_key == 0) {
+                        zero_pressed = !zero_pressed;
                     }
                     debounce_state = NOT_PRESSED;
                 }
