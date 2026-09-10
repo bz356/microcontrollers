@@ -92,7 +92,7 @@ volatile unsigned int adc_val;
 #define TIME_SAMPLE 10000
 #define MAX_SAMPLES         10000
 #define PLAYBACK_FREQUENCY 100
-#define PLAYBACK_TIME 10000
+#define PLAYBACK_TIME 1000
 
 uint16_t recording_one[MAX_SAMPLES];
 uint16_t recording_two[MAX_SAMPLES];
@@ -129,7 +129,7 @@ RecordingState recording_state[15];
 DebounceState debounce_state = NOT_PRESSED;
 
 bool recording = false; // for if the asterick is pressed
-bool zero_pressed = false;
+bool zero_pressed = true;
 uint16_t recording_index = 0;
 uint16_t playback_index = 0;
 uint16_t recording_lengths[10] = {0};
@@ -138,6 +138,10 @@ int prev_key = 0;
 
 uint16_t *recording_buf;
 uint16_t *playback_buf;
+
+uint8_t composer_sequence[15] = {0};
+bool compose_mode = false;
+uint8_t compose_index = 0;
 
 // Alarm ISR
 static void alarm_irq(void) {
@@ -181,7 +185,7 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
 
         // reading and printing ADC value
         unsigned int temp_val = adc_read();
-        if (zero_pressed || recording_state[current_key] == PLAYBACK) {
+        if (zero_pressed || recording_state[current_key] == PLAYBACK || recording_state[current_key] == RECORDING) {
             adc_val = temp_val; 
         }
         else {
@@ -197,7 +201,7 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
                 recording_buf[recording_index++] = temp_val ;
             }
         }
-        printf("ADC value: %d\n", adc_val);
+        // printf("ADC value: %d\n", adc_val);
 
         PT_YIELD_usec(1000);
     } 
@@ -366,6 +370,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     else if (valid_record && recording_state[current_key] == RECORDED) {
                         playback_index = 0;
                         recording_state[current_key] = PLAYBACK;
+                        composer_sequence[compose_index++] = current_key;
 
                         switch (current_key) {
                             case 1: playback_buf = recording_one   ; break ;
@@ -386,6 +391,19 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     else if (current_key == 0) {
                         zero_pressed = !zero_pressed;
                     }
+                    else if (current_key == 11 && !compose_mode) {
+                        compose_mode = true;
+                        printf("Composer mode on\n");
+                    } // # is pressed for the first time
+                    else if (current_key == 11) {
+                        printf("Composer mode sequence playback\n");
+                        for (int j = 0; j < compose_index; j++) {
+                            printf("Playing key %d", composer_sequence[j]);
+                            current_key = composer_sequence[j];
+                            recording_state[current_key] = PLAYBACK;
+                            PT_YIELD_UNTIL(pt, recording_state[current_key] != PLAYBACK);
+                        }
+                    } // # is pressed for the first time
                     debounce_state = NOT_PRESSED;
                 }
 
