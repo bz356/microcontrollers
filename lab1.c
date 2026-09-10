@@ -94,6 +94,7 @@ unsigned int keycodes[NUMKEYS] = {      0x57, 0x6E, 0x5E, 0x3E, 0x6D,
 unsigned int scancodes[KEYROWS] = {   0xE, 0xD, 0xB, 0x7} ;
 unsigned int button = 0x70 ;
 
+
 typedef enum DebounceState{
     NOT_PRESSED,
     MAYBE_PRESSED,
@@ -101,63 +102,14 @@ typedef enum DebounceState{
     PRESSED
 } DebounceState;
 
-
 DebounceState debounce_state = NOT_PRESSED;
-
-// debounce function
-// void debounce_button(uint32_t keypad) {
-//     bool isKeypadPressed = (~keypad & button) != 0; 
-//     static int possible = 0;
-    
-
-
-//     switch (debounce_state) {
-
-//         case NOT_PRESSED:
-//             if(isKeypadPressed){
-//                 debounce_state = MAYBE_PRESSED;
-//                 possible = keypad;
-//                 sleep_us(DEBOUNCE_DELAY_US);
-//             }
-            
-//             break;
-
-//         case MAYBE_PRESSED:
-//             if(keypad == possible){
-//                 debounce_state = PRESSED;
-//             }else{
-//                 debounce_state = NOT_PRESSED;
-//             }
-            
-//             break;
-
-//         case PRESSED:
-//             if(keypad != possible){
-//                 debounce_state = MAYBE_NOT_PRESSED;
-//             }
-//             break;
-
-//         case MAYBE_NOT_PRESSED:
-//             if(keypad == possible){
-//                 debounce_state = PRESSED;
-//             }else{
-//                 debounce_state = NOT_PRESSED;
-//             }
-//             break;
-
-//         default:
-//             // optional safety case
-//             debounce_state = NOT_PRESSED;
-//             break;
-//     }
-// }
-
-
-
 
 
 char keytext[40];
+bool recording = false; 
 int prev_key = 0;
+
+
 
 // Alarm ISR
 static void alarm_irq(void) {
@@ -249,18 +201,31 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 break;
 
             case MAYBE_PRESSED:
+                
                 if(keypad == possible){
-                    debounce_state = PRESSED;
-
+                    
+                    
                     // one button pressed here
                     // Look for a valid keycode.
                     for (i=0; i<NUMKEYS; i++) {
                         if (possible == keycodes[i]) break ;
                     }
+
+                    if (recording && i == 10) {
+                        printf("STOPPED RECORDING\n");
+                        recording = false;
+                    }
+                    else if (i == 10) {
+                        printf("RECORDING\n");
+                        recording = true;
+                    }
+
+
                     // If we don't find one, report invalid keycode
                     if (i==NUMKEYS) (i = -1) ;
+                    debounce_state = PRESSED;
+                    printf("KEYPAD: %d\n", i) ;
 
-                    printf("\n KEYPAD: %d", i) ;
                 }else{
                     debounce_state = NOT_PRESSED;
                 }
@@ -270,6 +235,10 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
             case PRESSED:
                 if(keypad != possible){
                     debounce_state = MAYBE_NOT_PRESSED;
+                }
+                bool valid_record = (i>=1 && i<=9);
+                if (recording && valid_record) {
+                    printf("Currently recording key: %d\n", i);
                 }
                 break;
 
@@ -304,7 +273,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
 
         // Print key to terminal
         
-
+        
         PT_YIELD_usec(30000) ;
     }
     // Indicate thread end

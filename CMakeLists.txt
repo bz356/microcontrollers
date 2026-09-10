@@ -41,6 +41,7 @@ target_link_libraries(lab1
     pico_sync
     pico_multicore
     hardware_adc
+    hardware_pio
     hardware_clocks
     hardware_irq
     hardware_spi
