@@ -199,7 +199,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 break;
 
             case MAYBE_PRESSED:
-                
+                sleep_ms(20);
                 if(keypad == possible){
                     
                     
@@ -219,10 +219,15 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     }
 
 
+                    bool valid_record = (i>=1 && i<=9);
+                    if (recording && valid_record) {
+                        printf("Started recording key: %d\n", i);
+                    }
+
                     // If we don't find one, report invalid keycode
                     if (i==NUMKEYS) (i = -1) ;
                     debounce_state = PRESSED;
-                    printf("\n KEYPAD: %d", i) ;
+                    // printf("KEYPAD: %d\n", i) ;
                 }else{
                     debounce_state = NOT_PRESSED;
                 }
@@ -233,18 +238,28 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 if(keypad != possible){
                     debounce_state = MAYBE_NOT_PRESSED;
                 }
-                bool valid_record = (i>=1 && i<=9);
-                if (recording && valid_record) {
-                    printf("Currently recording key: %d\n", i);
-                }
+                // bool valid_record = (i>=1 && i<=9);
+                // if (recording && valid_record) {
+                //     printf("Currently recording key: %d\n", i);
+                // }
                 break;
 
             case MAYBE_NOT_PRESSED:
+                sleep_ms(20);
+                for (i=0; i<NUMKEYS; i++) {
+                    if (possible == keycodes[i]) break ;
+                }
                 if(keypad == possible){
                     debounce_state = PRESSED;
                 }else{
+                    bool valid_record = (i>=1 && i<=9);
+                    if (recording && valid_record) {
+                        printf("Stopped recording key: %d\n", i);
+                    }
                     debounce_state = NOT_PRESSED;
                 }
+
+
                 break;
 
         default:
