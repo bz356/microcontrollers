@@ -37,8 +37,8 @@
 
 // ADC definitions
 #define LED_PIN 25
-#define ADC_PIN 26
-#define ADC_MUX 0
+#define ADC_PIN 27
+#define ADC_MUX 1
 
 // DAC definitions
 // A-channel, 1x, active
@@ -190,7 +190,7 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
                 recording_buf[recording_index++] = adc_val ;
             }
         }
-        // printf("ADC value: %d\n", adc_val);
+        printf("ADC value: %d\n", adc_val);
 
         PT_YIELD_usec(1000);
     } 
