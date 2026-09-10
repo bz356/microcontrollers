@@ -69,7 +69,7 @@ volatile int sin_table[sine_table_size];
 // SPI data
 uint16_t DAC_data; // output value
 
-unsigned int adc_val;
+volatile unsigned int adc_val;
 
 // Alarm interrupt setup
 #define ALARM_NUM 0
@@ -89,10 +89,10 @@ unsigned int adc_val;
 //#define DEBOUNCE_DELAY_US 20000
 
 #define SAMPLING_FREQUENCY  100
-#define TIME_SAMPLE (1/SAMPLING_FREQUENCY*1000000)
+#define TIME_SAMPLE 10000
 #define MAX_SAMPLES         10000
 #define PLAYBACK_FREQUENCY 100
-#define PLAYBACK_TIME (1/PLAYBACK_FREQUENCY*1000000)
+#define PLAYBACK_TIME 10000
 
 uint16_t recording_one[MAX_SAMPLES];
 uint16_t recording_two[MAX_SAMPLES];
@@ -133,6 +133,9 @@ uint16_t recording_index = 0;
 int current_key = 0;
 int prev_key = 0;
 
+uint16_t *recording_buf;
+uint16_t *playback_buf;
+
 // Alarm ISR
 static void alarm_irq(void) {
 
@@ -169,8 +172,8 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
     static uint64_t previous_time = 0;
     while(1) {
         bool any_one = false;
-        for (int i = 0; i < 9; i++) {
-            if (recording_state[i] >= RECORDED) {
+        for (int i = 1; i < 10; i++) {
+            if (recording_state[i] != PLAYBACK) {
                 any_one = true;
                 break;
             }
@@ -185,24 +188,9 @@ static PT_THREAD (protothread_toggle25(struct pt *pt))
         bool sample = (time_us_64() >= previous_time + TIME_SAMPLE);
         if (recording_state[current_key] == RECORDING && sample && current_key != 0) {
             previous_time = time_us_64();
-
-            uint32_t *buf;
-
-            switch (current_key) {
-                case 1: buf = recording_one   ; break ;
-                case 2: buf = recording_two   ; break ;
-                case 3: buf = recording_three ; break ;
-                case 4: buf = recording_four  ; break ;
-                case 5: buf = recording_five  ; break ;
-                case 6: buf = recording_six   ; break ;
-                case 7: buf = recording_seven ; break ;
-                case 8: buf = recording_eight ; break ;
-                case 9: buf = recording_nine  ; break ;
-                default: buf = NULL ; break ; 
-            }
-            memset(buf, 0, sizeof(buf));
-            if (buf != NULL) {
-                buf[recording_index++] = adc_val ;
+            
+            if (recording_buf != NULL && recording_index < MAX_SAMPLES) {
+                recording_buf[recording_index++] = adc_val ;
             }
         }
         // printf("ADC value: %d\n", adc_val);
@@ -219,39 +207,24 @@ static PT_THREAD (protothread_play(struct pt *pt))
     static uint64_t previous_time = 0;
     while (1) {
         //TODO change to recording_state
-        PT_YIELD_UNTIL(pt,
-        recording_state[current_key] != PLAYBACK && current_key != 0
-        );
+        PT_YIELD_UNTIL(pt, recording_state[current_key] == PLAYBACK && current_key != 0);
          
-
         bool playback = (time_us_64() >= previous_time + PLAYBACK_TIME);
 
         if (recording_state[current_key] == RECORDING && playback && current_key != 0) {
             previous_time = time_us_64();
 
-            uint32_t *buf;
-
-            switch (current_key) {
-                case 1: buf = recording_one   ; break ;
-                case 2: buf = recording_two   ; break ;
-                case 3: buf = recording_three ; break ;
-                case 4: buf = recording_four  ; break ;
-                case 5: buf = recording_five  ; break ;
-                case 6: buf = recording_six   ; break ;
-                case 7: buf = recording_seven ; break ;
-                case 8: buf = recording_eight ; break ;
-                case 9: buf = recording_nine  ; break ;
-                default: buf = NULL ; break ; 
-            }
-            if (buf != NULL) {
-                adc_val = buf[recording_index++] ;
+            
+            if (playback_buf != NULL && recording_index < MAX_SAMPLES) {
+                adc_val = playback_buf[recording_index++] ;
             }
         }
 
         PT_YIELD_usec(1000);
         // every thread ends with PT_END(pt)
-        PT_END(pt);
+        
     }
+    PT_END(pt);
 }
 
 
@@ -320,6 +293,19 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     if (recording && valid_record) { 
                         recording_index = 0;
                         recording_state[current_key] = RECORDING;
+                        switch (current_key) {
+                            case 1: recording_buf = recording_one   ; break ;
+                            case 2: recording_buf = recording_two   ; break ;
+                            case 3: recording_buf = recording_three ; break ;
+                            case 4: recording_buf = recording_four  ; break ;
+                            case 5: recording_buf = recording_five  ; break ;
+                            case 6: recording_buf = recording_six   ; break ;
+                            case 7: recording_buf = recording_seven ; break ;
+                            case 8: recording_buf = recording_eight ; break ;
+                            case 9: recording_buf = recording_nine  ; break ;
+                            default: recording_buf = NULL ; break ; 
+                        }
+                        memeset(recording_buf, 0, sizeof(recording_buf));   
                         printf("Started recording key: %d\n", i);
                     }
 
@@ -363,6 +349,20 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     else if (valid_record && recording_state[current_key] == RECORDED) {
                         recording_index = 0;
                         recording_state[current_key] = PLAYBACK;
+
+                        switch (current_key) {
+                            case 1: playback_buf = recording_one   ; break ;
+                            case 2: playback_buf = recording_two   ; break ;
+                            case 3: playback_buf = recording_three ; break ;
+                            case 4: playback_buf = recording_four  ; break ;
+                            case 5: playback_buf = recording_five  ; break ;
+                            case 6: playback_buf = recording_six   ; break ;
+                            case 7: playback_buf = recording_seven ; break ;
+                            case 8: playback_buf = recording_eight ; break ;
+                            case 9: playback_buf = recording_nine  ; break ;
+                            default: playback_buf = NULL ; break ; 
+                        }
+
                         printf("Started playback\n");
 
                     }
@@ -463,6 +463,7 @@ int main(){
   // protothread initialization
   pt_add_thread(protothread_toggle25);
   pt_add_thread(protothread_keypad) ;
+  pt_add_thread(protothread_play);
   
   // scheduler initialization
   pt_schedule_start;
