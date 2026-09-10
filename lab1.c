@@ -180,14 +180,21 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
         gpio_put(LED_PIN, !gpio_get(LED_PIN));
 
         // reading and printing ADC value
-        if (zero_pressed) adc_val = adc_read(); else adc_val = 0;
+        unsigned int temp_val = adc_read();
+        if (zero_pressed || recording_state[current_key] == PLAYBACK) {
+            adc_val = temp_val; 
+        }
+        else {
+            adc_val = 0;
+        }
+        
 
         bool sample = (time_us_64() >= previous_time + TIME_SAMPLE);
         if (recording_state[current_key] == RECORDING && sample && current_key != 0) {
             previous_time = time_us_64();
             
             if (recording_buf != NULL && recording_index < MAX_SAMPLES) {
-                recording_buf[recording_index++] = adc_val ;
+                recording_buf[recording_index++] = temp_val ;
             }
         }
         printf("ADC value: %d\n", adc_val);
