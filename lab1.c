@@ -143,9 +143,14 @@ uint16_t recording_lengths[10] = {0};
 uint16_t *recording_buf;
 uint16_t *playback_buf;
 
-uint8_t composer_sequence[15] = {0};
+uint8_t composer_sequence[50] = {0};
 bool compose_mode = false;
 uint8_t compose_index = 0;
+
+// Compose Playback Variables
+bool compose_playback = false;
+uint8_t compose_playback_index = 0;
+
 
 // Alarm ISR
 static void alarm_irq(void) {
@@ -230,7 +235,9 @@ static PT_THREAD (protothread_play(struct pt *pt))
             current_key >= 1 &&
             current_key <= 9 
         );
-         
+        
+        
+
         bool playback = (time_us_64() >= previous_time + PLAYBACK_TIME);
 
         if (recording_state[current_key] == PLAYBACK && playback && current_key != 0) {
@@ -246,6 +253,11 @@ static PT_THREAD (protothread_play(struct pt *pt))
                 recording_state[current_key] = RECORDED;
                 playback_index = 0;
                 printf("Finished playback\n");
+                if (compose_playback) {
+                    compose_playback_index++;
+                    current_key = composer_sequence[compose_playback_index];
+                    recording_state[current_key] = PLAYBACK; 
+                }
             }
         }
 
@@ -417,12 +429,9 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     } // # is pressed for the first time
                     else if (current_key == 11) {
                         printf("Composer mode sequence playback\n");
-                        for (int j = 0; j < compose_index; j++) {
-                            printf("Playing key %d", composer_sequence[j]);
-                            current_key = composer_sequence[j];
-                            recording_state[current_key] = PLAYBACK;
-                            PT_YIELD_UNTIL(pt, recording_state[current_key] != PLAYBACK);
-                        }
+                        compose_playback_index = 0;
+                        current_key = composer_sequence[compose_playback_index];
+                        recording_state[current_key] = PLAYBACK;
                     } // # is pressed for the first time
                     debounce_state = NOT_PRESSED;
                 }
