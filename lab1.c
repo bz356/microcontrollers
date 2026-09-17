@@ -242,7 +242,18 @@ static PT_THREAD (protothread_play(struct pt *pt))
 
         if (recording_state[current_key] == PLAYBACK && playback && current_key != 0) {
             previous_time = time_us_64();
-
+            switch (current_key) {
+                case 1: playback_buf = recording_one   ; break ;
+                case 2: playback_buf = recording_two   ; break ;
+                case 3: playback_buf = recording_three ; break ;
+                case 4: playback_buf = recording_four  ; break ;
+                case 5: playback_buf = recording_five  ; break ;
+                case 6: playback_buf = recording_six   ; break ;
+                case 7: playback_buf = recording_seven ; break ;
+                case 8: playback_buf = recording_eight ; break ;
+                case 9: playback_buf = recording_nine  ; break ;
+                default: playback_buf = NULL ; break ; 
+            }
             // Send the next saved sample to the synthesis ISR 
             if (playback_buf != NULL && playback_index <= recording_lengths[current_key]) {
                 adc_val = playback_buf[playback_index++] ;
@@ -255,18 +266,24 @@ static PT_THREAD (protothread_play(struct pt *pt))
                 printf("Finished playback\n");
                 if (compose_playback) {
                     compose_playback_index++;
-                    current_key = composer_sequence[compose_playback_index];
-                    recording_state[current_key] = PLAYBACK; 
-                    printf("Finished Composer Playback of %d\n", current_key);
+                    if (compose_playback_index < compose_index) {
+                        current_key = composer_sequence[compose_playback_index];
+                        recording_state[current_key] = PLAYBACK;
+                    } else {
+                        // sequence done, don't run into the zero padding
+                        compose_playback = false;
+                        compose_playback_index = 0;
+                        // leave current_key on the last real key so state[0] stays clean
+                    }
                 }
-            }
         }
 
         PT_YIELD_usec(1000);
         // every thread ends with PT_END(pt)
         
-    }
+        }
     PT_END(pt);
+    }
 }
 
 
