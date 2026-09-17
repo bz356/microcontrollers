@@ -257,6 +257,7 @@ static PT_THREAD (protothread_play(struct pt *pt))
                     compose_playback_index++;
                     current_key = composer_sequence[compose_playback_index];
                     recording_state[current_key] = PLAYBACK; 
+                    printf("Finished Composer Playback of %d\n", current_key);
                 }
             }
         }
@@ -402,7 +403,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     else if (valid_record && recording_state[current_key] == RECORDED) {
                         playback_index = 0;
                         recording_state[current_key] = PLAYBACK;
-                        composer_sequence[compose_index++] = current_key;
+                        if (compose_mode) composer_sequence[compose_index++] = current_key;
 
                         switch (current_key) {
                             case 1: playback_buf = recording_one   ; break ;
@@ -429,6 +430,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                     } // # is pressed for the first time
                     else if (current_key == 11) {
                         printf("Composer mode sequence playback\n");
+                        compose_playback = true;
                         compose_playback_index = 0;
                         current_key = composer_sequence[compose_playback_index];
                         recording_state[current_key] = PLAYBACK;
