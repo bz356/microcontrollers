@@ -48,8 +48,8 @@
 
 // DDS parameters
 #define two32 4294967296.0 // 2^32 
-#define Fs 50000
-#define DELAY 20 // 1/Fs (in microseconds)
+#define Fs 200000
+#define DELAY 5 // 1/Fs (in microseconds)
 
 // DDS variables
 volatile unsigned int phase_accum_main;
@@ -130,7 +130,7 @@ DebounceState debounce_state = NOT_PRESSED;
 
 // Global variables 
 bool recording = false; // for if the asterick is pressed
-bool zero_pressed = false;
+bool zero_pressed = true;
 
 // Most recently detected keypad key (*=10, 0=11, #=12)
 int current_key = 0;
@@ -217,7 +217,7 @@ static PT_THREAD (protothread_slider_record(struct pt *pt))
         }
         // printf("ADC value: %d\n", adc_val);
 
-        PT_YIELD_usec(1000);
+        PT_YIELD_usec(100);
     } 
     // every thread ends with PT_END(pt)
     PT_END(pt);
@@ -328,7 +328,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 break;
 
             case MAYBE_PRESSED:
-                sleep_ms(20);
+                sleep_ms(50);
                 if(keypad == possible){
                     
                     
@@ -387,7 +387,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
                 break;
 
             case MAYBE_NOT_PRESSED: // Key is released
-                sleep_ms(20);
+                sleep_ms(50);
                 for (i=0; i<NUMKEYS; i++) {
                     if (possible == keycodes[i]) break ;
                 }
@@ -465,7 +465,7 @@ static PT_THREAD (protothread_keypad(struct pt *pt))
     }
         
 
-        PT_YIELD_usec(30000) ;
+        PT_YIELD_usec(100) ;
     }
     // Indicate thread end
     PT_END(pt) ;
