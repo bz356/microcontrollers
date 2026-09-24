@@ -54,5 +54,9 @@ target_link_libraries(  VGA_Animation_Demo
                         hardware_clocks
                         hardware_pll)             
 
+
+
+pico_enable_stdio_usb(VGA_Animation_Demo 1)
+pico_enable_stdio_uart(VGA_Animation_Demo 0)
 # must match with executable name
 pico_add_extra_outputs(VGA_Animation_Demo)
