@@ -110,10 +110,8 @@ DebounceState debounce_state = NOT_PRESSED;
 int current_key = 0;
 
 ///////////////////////////// RECORDING / PLAYBACK VARIABLES /////////////////////////////
-#define SAMPLING_FREQUENCY  100
 #define TIME_SAMPLE 10000
 #define MAX_SAMPLES         10000
-#define PLAYBACK_FREQUENCY 100
 #define PLAYBACK_TIME 1000
 
 // One recording buffer per key 1-9. Each stores slider values (frequencies) not waveforms
