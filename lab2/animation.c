@@ -321,11 +321,16 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       // Clear the buffer
       clearLowFrame(0, BLACK);
       // Signal core 1 that it can start drawing
-      PT_SEM_SDK_SIGNAL(pt, &draw_semaphore) ;
+      // PT_SEM_SDK_SIGNAL(pt, &draw_semaphore) ;
       // update boid's position and velocity
       wallsAndEdges(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy) ;
-      // draw the boid at its new position
-      fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 15, color); 
+      
+      // draw the peg
+      fillCircle(fix2int15(peg_x), fix2int15(peg_y), PEG_RADIUS, WHITE); 
+
+      // draw the ball
+      fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), BALL_RADIUS, BLUE); 
+
       // draw the boundaries
       //drawArena() ;
      // NEVER exit while
