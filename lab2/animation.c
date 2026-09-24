@@ -201,6 +201,8 @@ fix15 peg_y = int2fix15(240) ;
 fix15 gravity = float2fix15(0.37) ;
 fix15 bounciness = float2fix15(0.5) ;
 
+int global_ctr_chan;
+
 // Create a semaphore
 semaphore_t draw_semaphore ;
 
@@ -227,6 +229,7 @@ static void dmaSetup(void) {
     // Select DMA channels
     int data_chan = dma_claim_unused_channel(true);;
     int ctrl_chan = dma_claim_unused_channel(true);;
+    global_ctr_chan = ctrl_chan;
 
     // Setup the control channel
     dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
@@ -255,7 +258,7 @@ static void dmaSetup(void) {
     // 0x3b means timer0 (see SDK manual)
     channel_config_set_dreq(&c2, 0x3b);                                 // DREQ paced by timer 0
     // chain to the controller DMA channel
-    channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
+    // channel_config_set_chain_to(&c2, ctrl_chan);                        // Chain to control channel
 
 
     dma_channel_configure(
@@ -268,25 +271,15 @@ static void dmaSetup(void) {
     );
 
 
-  // start the control channel SOUND ON
+  // // start the control channel SOUND ON
   dma_start_channel_mask(1u << ctrl_chan) ;
-
-  // SOUND OFF 
-  dma_start_channel_mask(0u << ctrl_chan) ;
+  
 }
 
-static void soundOn(void) {
-  dma_start_channel_mask(1u << 0) ;
+static void thunk(void) {
+  dma_start_channel_mask(1u << global_ctr_chan) ;
 }
 
-static void soundOff(void) {
-  // SOUND OFF
-  // dma_hw->abort = (1u << ctrl_chan) | (1u << data_chan);
-  // while (dma_hw->abort) tight_loop_contents();   // wait until both have stopped
-
-  dma_channel_abort(0) ;
-  dma_channel_abort(1) ;
-}
 
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
@@ -373,9 +366,7 @@ void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
       *vx = *vx + multfix15(normal_x, intermediate_term) ;
       *vy = *vy + multfix15(normal_y, intermediate_term) ;
 
-      soundOn() ; // Play sound on collision
-      sleep_ms(50) ; // Wait for 50 ms
-      soundOff() ; // Stop sound after 50 ms
+      thunk() ; // Play sound on collision
 
       // Lose some energy during the bounce
       *vx = multfix15(bounciness, *vx) ;
@@ -499,13 +490,15 @@ int main(){
   // initialize stio
   stdio_init_all() ;
 
-  dmaSetup();
+  
 
   // initialize rotary encoder
   enc_init();
 
   // initialize VGA
   initVGA() ;
+
+  dmaSetup();
 
   // Initialize the semaphore
   // Arguments: pointer to sem, initial count, max count
