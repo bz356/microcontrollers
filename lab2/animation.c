@@ -268,8 +268,24 @@ static void dmaSetup(void) {
     );
 
 
-  // start the control channel
+  // start the control channel SOUND ON
   dma_start_channel_mask(1u << ctrl_chan) ;
+
+  // SOUND OFF 
+  dma_start_channel_mask(0u << ctrl_chan) ;
+}
+
+static void soundOn(void) {
+  dma_start_channel_mask(1u << 0) ;
+}
+
+static void soundOff(void) {
+  // SOUND OFF
+  // dma_hw->abort = (1u << ctrl_chan) | (1u << data_chan);
+  // while (dma_hw->abort) tight_loop_contents();   // wait until both have stopped
+
+  dma_channel_abort(0) ;
+  dma_channel_abort(1) ;
 }
 
 // Create a boid
@@ -353,6 +369,10 @@ void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
       // Change velocity so the ball bounces
       *vx = *vx + multfix15(normal_x, intermediate_term) ;
       *vy = *vy + multfix15(normal_y, intermediate_term) ;
+
+      soundOn() ; // Play sound on collision
+      sleep_ms(50) ; // Wait for 50 ms
+      soundOff() ; // Stop sound after 50 ms
 
       // Lose some energy during the bounce
       *vx = multfix15(bounciness, *vx) ;
