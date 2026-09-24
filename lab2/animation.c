@@ -420,6 +420,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
 // Animation on core 0
 static PT_THREAD (protothread_anim(struct pt *pt))
 {
+    static char rotary_text[30];
     // Mark beginning of thread
     PT_BEGIN(pt);
 
@@ -434,6 +435,11 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       // Signal core 1 that it can start drawing
       // PT_SEM_SDK_SIGNAL(pt, &draw_semaphore) ;
       // update boid's position and velocity
+
+      // Display rotary encoder count
+      sprintf(rotary_text, "Rotary: %d", enc_count);
+      drawTextGLCD(10, 10, rotary_text, WHITE, BLACK);
+      
       wallsAndEdges(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy) ;
       
       // draw the peg
