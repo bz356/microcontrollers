@@ -98,6 +98,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 
 // A-channel, 1x, active
 #define DAC_config_chan_A 0b0011000000000000
+#define DAC_config_chan_B 0b1011000000000000
 
 //SPI configurations
 #define PIN_MISO 4
@@ -223,7 +224,7 @@ static void dmaSetup(void) {
     int i ;
     for (i=0; i<(sine_table_size); i++){
         raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
-        DAC_data[i] = DAC_config_chan_A | (raw_sin[i] & 0x0fff) ;
+        DAC_data[i] = DAC_config_chan_B | (raw_sin[i] & 0x0fff) ;
     }
 
     // Select DMA channels
@@ -489,7 +490,7 @@ int main(){
   set_sys_clock_khz(150000, true) ;
   // initialize stio
   stdio_init_all() ;
-
+  printf("Hello World!\n");
   
 
   // initialize rotary encoder
@@ -511,7 +512,7 @@ int main(){
   // add threads
   pt_add_thread(protothread_serial);
   pt_add_thread(protothread_anim);
-  pt_add_thread(protothread_anim1);
+  // pt_add_thread(protothread_anim1);  
 
   // start scheduler
   pt_schedule_start ;
