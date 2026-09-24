@@ -163,20 +163,37 @@ fix15 boid1_y ;
 fix15 boid1_vx ;
 fix15 boid1_vy ;
 
+#define BALL_RADIUS 4
+#define PEG_RADIUS 6
+
+fix15 peg_x = int2fix15(320) ;
+fix15 peg_y = int2fix15(240) ;
+
+fix15 gravity = float2fix15(0.37) ;
+fix15 bounciness = float2fix15(0.5) ;
+
 // Create a semaphore
 semaphore_t draw_semaphore ;
 
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 {
-  // Start in center of screen
+  (void)direction ;
+
+  // Start in top center of screen instead of center
   *x = int2fix15(320) ;
-  *y = int2fix15(240) ;
-  // Choose left or right
-  if (direction) *vx = int2fix15(3) ;
-  else *vx = int2fix15(-3) ;
-  // Moving down
-  *vy = int2fix15(1) ;
+  *y = int2fix15(20) ;
+
+  // Randomized horizontal velocity
+  if (rand() & 1) {
+    *vx = float2fix15(0.2) ; 
+  } 
+  else {
+    *vx = float2fix15(-0.2) ;
+  }
+
+  // Ball is dropped with zero y-velocity
+  *vy = 0 ;
 }
 
 // Draw the boundaries
@@ -195,10 +212,10 @@ void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
     *vy = (-*vy) ;
     *y  = (*y + int2fix15(5)) ;
   }
-  if (hitBottom(*y)) {
-    *vy = (-*vy) ;
-    *y  = (*y - int2fix15(5)) ;
-  } 
+  // if (hitBottom(*y)) {
+  //   *vy = (-*vy) ;
+  //   *y  = (*y - int2fix15(5)) ;
+  // } 
   if (hitRight(*x)) {
     *vx = (-*vx) ;
     *x  = (*x - int2fix15(5)) ;
@@ -211,6 +228,51 @@ void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
   // Update position using velocity
   *x = *x + *vx ;
   *y = *y + *vy ;
+
+  // // Check for collision with peg
+  // fix15 dx = *x - peg_x ;
+  // fix15 dy = *y - peg_y ;
+
+  // fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS) ;
+
+  // if ((absfix15(dx) < collision_distance) &&
+  //     (absfix15(dy) < collision_distance)) {
+
+  //   float dx_float = fix2float15(dx) ;
+  //   float dy_float = fix2float15(dy) ;
+
+  //   float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+
+  //   if ((distance < (BALL_RADIUS + PEG_RADIUS)) && (distance > 0)) {
+
+  //     fix15 normal_x = float2fix15(dx_float / distance) ;
+  //     fix15 normal_y = float2fix15(dy_float / distance) ;
+
+  //     fix15 intermediate_term =
+  //         -2 * (multfix15(normal_x, *vx) + multfix15(normal_y, *vy)) ;
+
+  //     // Move ball just outside the peg
+  //     *x = peg_x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
+  //     *y = peg_y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
+
+  //     // Change velocity so the ball bounces
+  //     *vx = *vx + multfix15(normal_x, intermediate_term) ;
+  //     *vy = *vy + multfix15(normal_y, intermediate_term) ;
+
+  //     // Lose some energy during the bounce
+  //     *vx = multfix15(bounciness, *vx) ;
+  //     *vy = multfix15(bounciness, *vy) ;
+
+  //   }
+
+  // If ball falls off bottom of screen, drop again from top
+  if (*y > int2fix15(480)) {
+    spawnBoid(x, y, vx, vy, 0) ;
+    return ;
+  }
+
+    // Make gravity increase downward velocity every frame
+  *vy = *vy + gravity ;
 }
 
 // ==================================================
@@ -265,7 +327,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       // draw the boid at its new position
       fillCircle(fix2int15(boid0_x), fix2int15(boid0_y), 15, color); 
       // draw the boundaries
-      drawArena() ;
+      //drawArena() ;
      // NEVER exit while
     } // END WHILE(1)
   PT_END(pt);
