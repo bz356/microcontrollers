@@ -300,6 +300,9 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
   // Randomized horizontal velocity
   // float random_vx = -0.2f + ((float)rand() / 100) * 0.6f;
   int32_t offset_milli = (int32_t)(time_us_32() % 401) - 200;
+  if (offset_milli == 0) {
+    offset_milli++;
+  }
   //float random_vx = -0.2f + ((float)offset_milli / 1000.0f) * 0.6f;
   *vx = float2fix15(offset_milli / 1000.0f) ;
 
