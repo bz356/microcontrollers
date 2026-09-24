@@ -5,14 +5,32 @@
  * This demonstration animates two balls bouncing about the screen.
  * Through a serial interface, the user can change the ball color.
  *
- * HARDWARE CONNECTIONS
+ * HARDWARE CONNECTIONS (WEEK 1 FOCUS)
+
+ VGA (resistors for voltage division to VGA analog input)
   - GPIO 16 ---> VGA Hsync
   - GPIO 17 ---> VGA Vsync
   - GPIO 18 ---> VGA Green lo-bit --> 470 ohm resistor --> VGA_Green
   - GPIO 19 ---> VGA Green hi_bit --> 330 ohm resistor --> VGA_Green
   - GPIO 20 ---> 330 ohm resistor ---> VGA-Blue
   - GPIO 21 ---> 330 ohm resistor ---> VGA-Red
-  - RP2040 GND ---> VGA-GND
+  - GND     ---> VGA GND
+
+  DAC
+  - GPIO 5  ---> CS, DAC pin 2
+  - GPIO 6  ---> SCLK, DAC pin 3
+  - GPIO 7  ---> MOSI, DAC pin 4
+  - GPIO 4  ---> MISO, NC
+  - +3.3V   ---> DAC VDD
+  - GND     ---> DAC GND and LDAC
+
+  Rotary Encoder (turn on internal pull-ups for A, B, and SWITCH)
+  - GPIO 10 ---> A
+  - GPIO 11 ---> B
+  - GPIO 12 ---> SWITCH
+  - GND     ---> C, other SWITCH PIN
+
+
  *
  * RESOURCES USED
  *  - PIO state machines 0, 1, and 2 on PIO instance 0
@@ -57,6 +75,78 @@ typedef signed int fix15 ;
 #define hitTop(b) (b<int2fix15(100))
 #define hitLeft(a) (a<int2fix15(100))
 #define hitRight(a) (a>int2fix15(540))
+
+// Rotary Encoder
+#define ENC_A  10
+#define ENC_B  11
+#define ENC_SW 12
+#define ENC_SW_DEBOUNCE_US 20000 // 20 ms
+
+volatile int enc_count = 0; // number shown on VGA
+static volatile uint8_t enc_state; // state of pins A and B written in last 2 bits as AB
+static volatile int8_t enc_accum; // quarter step count of pins A and B
+
+volatile bool enc_sw_pressed = false; // flag set by interrupt when switch is pressed
+static volatile uint32_t enc_sw_last_edge;
+
+// read from old to new, +1 or -1 on valid one-step turns and 0 for no turn or impossible two-step turn
+
+static const int8_t enc_table[16] = {
+  // new: 00, 01, 10 11
+          0, -1,  1,  0, // old 00
+          1,  0,  0, -1, // old 01
+         -1,  0,  0,  1, // old 10
+          0,  1, -1,  0, // old 11
+};
+
+void enc_callback(uint gpio, uint32_t events)
+{
+  if (gpio == ENC_A || gpio == ENC_B) {
+    uint8_t new_state = (gpio_get(ENC_A) << 1) | gpio_get(ENC_B);
+    enc_accum += enc_table[(enc_state << 2) | new_state]; // increments, decrements, or keeps enc_accum the same depending on lookup table
+    enc_state = new_state;
+
+    if (new_state == 0b11) 
+    {
+      if (enc_accum >= 4) 
+      {
+        enc_count++;
+      }
+      else if (enc_accum <= -4)
+      {
+        enc_count--;
+      }
+      enc_accum = 0;
+    }
+  }
+
+  else if (gpio == ENC_SW) {
+    uint32_t now = time_us_32();
+
+    if ((events & GPIO_IRQ_EDGE_FALL) && (now - enc_sw_last_edge > ENC_SW_DEBOUNCE_US)) 
+    {
+      enc_sw_pressed = true;
+    }
+
+    enc_sw_last_edge = now;
+  }
+}
+
+void enc_init(void)
+{
+  gpio_init(ENC_A) ;  gpio_set_dir(ENC_A, GPIO_IN) ;  gpio_pull_up(ENC_A) ;
+  gpio_init(ENC_B) ;  gpio_set_dir(ENC_B, GPIO_IN) ;  gpio_pull_up(ENC_B) ;
+  gpio_init(ENC_SW) ; gpio_set_dir(ENC_SW, GPIO_IN) ; gpio_pull_up(ENC_SW) ;
+
+  sleep_ms(1) ;   // let the pull-ups settle before reading the start state
+  enc_state = (gpio_get(ENC_A) << 1) | gpio_get(ENC_B) ;
+  enc_accum = 0 ;
+
+  // the first call registers the callback; the others just enable their pins
+  gpio_set_irq_enabled_with_callback(ENC_A, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, &enc_callback) ;
+  gpio_set_irq_enabled(ENC_B,  GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true) ;
+  gpio_set_irq_enabled(ENC_SW, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true) ;
+}
 
 // the color of the boid
 char color = WHITE ;
@@ -222,6 +312,9 @@ int main(){
   set_sys_clock_khz(150000, true) ;
   // initialize stio
   stdio_init_all() ;
+
+  // initialize rotary encoder
+  enc_init();
 
   // initialize VGA
   initVGA() ;
