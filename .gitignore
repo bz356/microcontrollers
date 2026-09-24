@@ -1,2 +1,5 @@
-build
-!.vscode/*
+# Build output (any folder named build, at any depth)
+build/
+
+# VS Code settings (any .vscode folder, at any depth)
+.vscode/
