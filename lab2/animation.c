@@ -185,12 +185,8 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
   *y = int2fix15(20) ;
 
   // Randomized horizontal velocity
-  if (rand() & 1) {
-    *vx = float2fix15(0.2) ; 
-  } 
-  else {
-    *vx = float2fix15(-0.2) ;
-  }
+  float random_vx = -0.2f + ((float)rand() / 100) * 0.6f;
+  *vx = float2fix15(random_vx);
 
   // Ball is dropped with zero y-velocity
   *vy = 0 ;
