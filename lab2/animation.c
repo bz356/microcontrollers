@@ -157,6 +157,7 @@ fix15 boid0_y ;
 fix15 boid0_vx ;
 fix15 boid0_vy ;
 
+
 // Boid on core 1
 fix15 boid1_x ;
 fix15 boid1_y ;
@@ -185,8 +186,10 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
   *y = int2fix15(20) ;
 
   // Randomized horizontal velocity
-  float random_vx = -0.2f + ((float)rand() / 100) * 0.6f;
-  *vx = float2fix15(random_vx);
+  // float random_vx = -0.2f + ((float)rand() / 100) * 0.6f;
+  int32_t offset_milli = (int32_t)(time_us_32() % 401) - 200;
+  //float random_vx = -0.2f + ((float)offset_milli / 1000.0f) * 0.6f;
+  *vx = float2fix15(offset_milli / 1000.0f) ;
 
   // Ball is dropped with zero y-velocity
   *vy = 0 ;
@@ -204,10 +207,10 @@ void drawArena() {
 void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
 {
   // Reverse direction if we've hit a wall
-  if (hitTop(*y)) {
-    *vy = (-*vy) ;
-    *y  = (*y + int2fix15(5)) ;
-  }
+  // if (hitTop(*y)) {
+  //   *vy = (-*vy) ;
+  //   *y  = (*y + int2fix15(5)) ;
+  // }
   // if (hitBottom(*y)) {
   //   *vy = (-*vy) ;
   //   *y  = (*y - int2fix15(5)) ;
@@ -225,41 +228,42 @@ void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
   *x = *x + *vx ;
   *y = *y + *vy ;
 
-  // // Check for collision with peg
-  // fix15 dx = *x - peg_x ;
-  // fix15 dy = *y - peg_y ;
+  // Check for collision with peg
+  fix15 dx = *x - peg_x ;
+  fix15 dy = *y - peg_y ;
 
-  // fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS) ;
+  fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS) ;
 
-  // if ((absfix15(dx) < collision_distance) &&
-  //     (absfix15(dy) < collision_distance)) {
+  if ((absfix15(dx) < collision_distance) &&
+      (absfix15(dy) < collision_distance)) {
 
-  //   float dx_float = fix2float15(dx) ;
-  //   float dy_float = fix2float15(dy) ;
+    float dx_float = fix2float15(dx) ;
+    float dy_float = fix2float15(dy) ;
 
-  //   float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+    float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
 
-  //   if ((distance < (BALL_RADIUS + PEG_RADIUS)) && (distance > 0)) {
+    if ((distance < (BALL_RADIUS + PEG_RADIUS)) && (distance > 0)) {
 
-  //     fix15 normal_x = float2fix15(dx_float / distance) ;
-  //     fix15 normal_y = float2fix15(dy_float / distance) ;
+      fix15 normal_x = float2fix15(dx_float / distance) ;
+      fix15 normal_y = float2fix15(dy_float / distance) ;
 
-  //     fix15 intermediate_term =
-  //         -2 * (multfix15(normal_x, *vx) + multfix15(normal_y, *vy)) ;
+      fix15 intermediate_term =
+          -2 * (multfix15(normal_x, *vx) + multfix15(normal_y, *vy)) ;
 
-  //     // Move ball just outside the peg
-  //     *x = peg_x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
-  //     *y = peg_y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
+      // Move ball just outside the peg
+      *x = peg_x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
+      *y = peg_y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
 
-  //     // Change velocity so the ball bounces
-  //     *vx = *vx + multfix15(normal_x, intermediate_term) ;
-  //     *vy = *vy + multfix15(normal_y, intermediate_term) ;
+      // Change velocity so the ball bounces
+      *vx = *vx + multfix15(normal_x, intermediate_term) ;
+      *vy = *vy + multfix15(normal_y, intermediate_term) ;
 
-  //     // Lose some energy during the bounce
-  //     *vx = multfix15(bounciness, *vx) ;
-  //     *vy = multfix15(bounciness, *vy) ;
+      // Lose some energy during the bounce
+      *vx = multfix15(bounciness, *vx) ;
+      *vy = multfix15(bounciness, *vy) ;
 
-  //   }
+    }
+  }
 
   // If ball falls off bottom of screen, drop again from top
   if (*y > int2fix15(480)) {
@@ -393,6 +397,7 @@ int main(){
   // add threads
   pt_add_thread(protothread_serial);
   pt_add_thread(protothread_anim);
+  pt_add_thread(protothread_anim1);
 
   // start scheduler
   pt_schedule_start ;
