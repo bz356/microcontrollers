@@ -156,6 +156,22 @@ static const int8_t enc_table[16] = {
           0,  1, -1,  0, // old 11
 };
 
+// Histogram definitions and variables
+
+#define NUM_BUCKETS (NUM_ROWS + 1)
+
+#define LAST_PEG_Y (PEG_START_Y + (NUM_ROWS - 1) * ROW_SPACE)
+#define LAST_ROW_FIRST_X (320 - ((NUM_ROWS - 1) * PEG_SPACE) / 2)
+
+#define HIST_TOP (LAST_PEG_Y + PEG_RADIUS + BALL_RADIUS + 6)
+#define HIST_BOTTOM 475
+#define HIST_HEIGHT (HIST_BOTTOM - HIST_TOP)
+#define BAR_WIDTH (PEG_SPACE - 8)
+
+int histogram[NUM_BUCKETS] = {0};
+int histogram_max = 0;
+
+
 void enc_callback(uint gpio, uint32_t events)
 {
   if (gpio == ENC_A || gpio == ENC_B) {
@@ -453,11 +469,14 @@ void updateBallPos(Ball *ball){
 
   handlePegCollisions(ball);
 
-  // If ball falls off bottom of screen, drop again from top
-  if(ball->y > int2fix15(480)){
+  // If ball reaches top of histogram, drop again from top
+  if (ball->y >= int2fix15(HIST_TOP)) {
+    addToHistogram(fix2int15(ball->x));
     spawnBall(ball);
     return;
-  }
+}
+
+  
 
   ball->vy += gravity;
 
@@ -537,6 +556,68 @@ void updateBallPos(Ball *ball){
 //   *vy = *vy + gravity ;
 // }
 
+
+// ==================================================
+// Histogram
+// ==================================================
+
+
+// Bucket 0 is left of the first peg w last bucket  right of the rightmost peg 
+// All others are between pairs of pegs.
+static int bucketForX(int x) {
+    if (x < LAST_ROW_FIRST_X) {
+        return 0;
+    }
+
+    int bucket = 1 + (x - LAST_ROW_FIRST_X) / PEG_SPACE;
+
+    if (bucket >= NUM_BUCKETS) {
+        return NUM_BUCKETS - 1;
+    }
+
+    return bucket;
+}
+
+void addToHistogram(int x) {
+    int bucket = bucketForX(x);
+
+    histogram[bucket]++;
+
+    if (histogram[bucket] > histogram_max) {
+        histogram_max = histogram[bucket];
+    }
+}
+
+void drawHistogram(void) {
+    for (int i = 0; i < NUM_BUCKETS; i++) {
+        int bar_height = 0;
+
+        // Scale counts to the vertical space below the pegs.
+        if (histogram_max > 0) {
+            bar_height =
+                (histogram[i] * HIST_HEIGHT) / histogram_max;
+        }
+
+        if (bar_height > 0) {
+            int center_x =
+                LAST_ROW_FIRST_X +
+                i * PEG_SPACE -
+                PEG_SPACE / 2;
+
+            fillRect(
+                center_x - BAR_WIDTH / 2,
+                HIST_BOTTOM - bar_height,
+                BAR_WIDTH,
+                bar_height,
+                BLUE
+            );
+        }
+    }
+
+    drawHLine(0, HIST_BOTTOM, 640, WHITE);
+}
+
+
 // ==================================================
 // === users serial input thread
 // ==================================================
@@ -608,6 +689,9 @@ static PT_THREAD (protothread_anim(struct pt *pt))
         updateBallPos(&balls[i]);
         drawBall(&balls[i]);
       }
+
+      // draw the histogram
+      drawHistogram();
 
       // draw the boundaries
       //drawArena() ;
