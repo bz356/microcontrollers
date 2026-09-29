@@ -108,7 +108,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 10 
+#define MAX_BALLS 100 
 
 typedef struct Ball {
   fix15 x; 
@@ -120,6 +120,7 @@ typedef struct Ball {
 } Ball;
 
 Ball balls[MAX_BALLS];
+uint32_t current_ball_count = MAX_BALLS;
 
 #define NUM_ROWS 16
 #define PEG_START_Y 60 // where the first peg starts
@@ -169,6 +170,7 @@ static const int8_t enc_table[16] = {
 #define BAR_WIDTH (PEG_SPACE - 8)
 
 int histogram[NUM_BUCKETS] = {0};
+uint32_t ball_count = 0;
 int histogram_max = 0;
 
 
@@ -325,6 +327,66 @@ static void thunk(void) {
   dma_start_channel_mask(1u << global_ctr_chan) ;
 }
 
+// ==================================================
+// Histogram
+// ==================================================
+
+
+// Bucket 0 is left of the first peg w last bucket  right of the rightmost peg 
+// All others are between pairs of pegs.
+static int bucketForX(int x) {
+    if (x < LAST_ROW_FIRST_X) {
+        return 0;
+    }
+
+    int bucket = 1 + (x - LAST_ROW_FIRST_X) / PEG_SPACE;
+
+    if (bucket >= NUM_BUCKETS) {
+        return NUM_BUCKETS - 1;
+    }
+
+    return bucket;
+}
+
+void addToHistogram(int x) {
+    int bucket = bucketForX(x);
+
+    histogram[bucket]++;
+
+    if (histogram[bucket] > histogram_max) {
+        histogram_max = histogram[bucket];
+    }
+}
+
+void drawHistogram(void) {
+    for (int i = 0; i < NUM_BUCKETS; i++) {
+        int bar_height = 0;
+
+        // Scale counts to the vertical space below the pegs.
+        if (histogram_max > 0) {
+            bar_height =
+                (histogram[i] * HIST_HEIGHT) / histogram_max;
+        }
+
+        if (bar_height > 0) {
+            int center_x =
+                LAST_ROW_FIRST_X +
+                i * PEG_SPACE -
+                PEG_SPACE / 2;
+
+            fillRect(
+                center_x - BAR_WIDTH / 2,
+                HIST_BOTTOM - bar_height,
+                BAR_WIDTH,
+                bar_height,
+                BLUE
+            );
+        }
+    }
+
+    drawHLine(0, HIST_BOTTOM, 640, WHITE);
+}
+
 
 // Create a boid
 void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
@@ -473,6 +535,7 @@ void updateBallPos(Ball *ball){
   if (ball->y >= int2fix15(HIST_TOP)) {
     addToHistogram(fix2int15(ball->x));
     spawnBall(ball);
+    ball_count++;
     return;
 }
 
@@ -557,65 +620,7 @@ void updateBallPos(Ball *ball){
 // }
 
 
-// ==================================================
-// Histogram
-// ==================================================
 
-
-// Bucket 0 is left of the first peg w last bucket  right of the rightmost peg 
-// All others are between pairs of pegs.
-static int bucketForX(int x) {
-    if (x < LAST_ROW_FIRST_X) {
-        return 0;
-    }
-
-    int bucket = 1 + (x - LAST_ROW_FIRST_X) / PEG_SPACE;
-
-    if (bucket >= NUM_BUCKETS) {
-        return NUM_BUCKETS - 1;
-    }
-
-    return bucket;
-}
-
-void addToHistogram(int x) {
-    int bucket = bucketForX(x);
-
-    histogram[bucket]++;
-
-    if (histogram[bucket] > histogram_max) {
-        histogram_max = histogram[bucket];
-    }
-}
-
-void drawHistogram(void) {
-    for (int i = 0; i < NUM_BUCKETS; i++) {
-        int bar_height = 0;
-
-        // Scale counts to the vertical space below the pegs.
-        if (histogram_max > 0) {
-            bar_height =
-                (histogram[i] * HIST_HEIGHT) / histogram_max;
-        }
-
-        if (bar_height > 0) {
-            int center_x =
-                LAST_ROW_FIRST_X +
-                i * PEG_SPACE -
-                PEG_SPACE / 2;
-
-            fillRect(
-                center_x - BAR_WIDTH / 2,
-                HIST_BOTTOM - bar_height,
-                BAR_WIDTH,
-                bar_height,
-                BLUE
-            );
-        }
-    }
-
-    drawHLine(0, HIST_BOTTOM, 640, WHITE);
-}
 
 
 // ==================================================
@@ -661,7 +666,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     // Spawn a boid
     //spawnBoid(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy, 0);
     // initialize all 10 balls
-    for(int i = 0; i < MAX_BALLS; i++){
+    for(int i = 0; i < current_ball_count; i++){
       spawnBall(&balls[i]);
     }
 
@@ -674,10 +679,16 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       // PT_SEM_SDK_SIGNAL(pt, &draw_semaphore) ;
       // update boid's position and velocity
 
-      // Display rotary encoder count
+      // Display rotary encoder count, num of balls, total balls fall through, time since boot
       sprintf(rotary_text, "Rotary: %d", enc_count);
       drawTextGLCD(10, 10, rotary_text, WHITE, BLACK);
-      
+      sprintf(rotary_text, "# of balls: %d", current_ball_count);
+      drawTextGLCD(10, 20, rotary_text, WHITE, BLACK);
+      sprintf(rotary_text, "Total Balls %d", ball_count);
+      drawTextGLCD(10, 30, rotary_text, WHITE, BLACK);
+      // fix15 time_since_boot = int2fix15(time_us_32()) / 1000000;
+      sprintf(rotary_text, "Time since boot (s) %d", time_us_64()/1000000ULL);
+      drawTextGLCD(10, 40, rotary_text, WHITE, BLACK);
       //wallsAndEdges(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy) ;
       
       // draw the pegs
