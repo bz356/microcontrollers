@@ -108,7 +108,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 100 
+#define MAX_BALLS 1000 
 
 typedef struct Ball {
   fix15 x; 
@@ -120,7 +120,7 @@ typedef struct Ball {
 } Ball;
 
 Ball balls[MAX_BALLS];
-uint32_t current_ball_count = MAX_BALLS;
+uint32_t current_ball_count = 350;
 
 #define NUM_ROWS 16
 #define PEG_START_Y 60 // where the first peg starts
@@ -185,10 +185,16 @@ void enc_callback(uint gpio, uint32_t events)
     {
       if (enc_accum >= 4) 
       {
+        if (current_ball_count < MAX_BALLS) {
+          current_ball_count++;
+        }
         enc_count++;
       }
       else if (enc_accum <= -4)
       {
+        if (current_ball_count > 0) {
+          current_ball_count--;
+        }
         enc_count--;
       }
       enc_accum = 0;
@@ -538,12 +544,9 @@ void updateBallPos(Ball *ball){
     ball_count++;
     return;
 }
-
-  
-
   ball->vy += gravity;
-
 }
+
 
 // Detect wallstrikes, update velocity and position
 // void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
@@ -666,7 +669,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
     // Spawn a boid
     //spawnBoid(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy, 0);
     // initialize all 10 balls
-    for(int i = 0; i < current_ball_count; i++){
+    for(int i = 0; i < MAX_BALLS; i++){
       spawnBall(&balls[i]);
     }
 
@@ -696,7 +699,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       drawPegs();
 
       // draw the ball
-      for(int i = 0; i < MAX_BALLS; i++){
+      for(int i = 0; i < current_ball_count; i++){
         updateBallPos(&balls[i]);
         drawBall(&balls[i]);
       }
