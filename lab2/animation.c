@@ -98,7 +98,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball definition
 #define MAX_BALLS 2000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 1000
+#define START_BALLS 100
 
 typedef struct Ball {
   fix15 x; 
@@ -156,9 +156,12 @@ static const int8_t enc_table[16] = {
 #define HIST_HEIGHT (HIST_BOTTOM - HIST_TOP)
 #define BAR_WIDTH (PEG_SPACE - 8)
 
-int histogram[NUM_BUCKETS] = {0};
-uint32_t ball_count = 0;
-int histogram_max = 0;
+// int histogram[NUM_BUCKETS] = {0};
+// uint32_t ball_count = 0;
+// int histogram_max = 0;
+
+int histogram[2][NUM_BUCKETS] = {0};  // one row per core
+uint32_t ball_count[2] = {0};
 
 // button cycles through different modes after clicking
 typedef enum { MODE_BALLS, MODE_BOUNCE, MODE_GRAVITY, NUM_MODES } Mode;
@@ -247,6 +250,7 @@ int global_data_chan;
 
 // Create a semaphore
 semaphore_t draw_semaphore ;
+semaphore_t done_semaphore ;
 
 static void dmaSetup(void) {
   // Initialize SPI channel (channel, baud rate set to 20MHz)
@@ -347,42 +351,33 @@ static int bucketForX(int x) {
 }
 
 void addToHistogram(int x) {
-    int bucket = bucketForX(x);
-
-    histogram[bucket]++;
-
-    if (histogram[bucket] > histogram_max) {
-        histogram_max = histogram[bucket];
-    }
+    histogram[get_core_num()][bucketForX(x)]++;
 }
 
 void drawHistogram(void) {
+    int totals[NUM_BUCKETS];
+    int max = 0;
     for (int i = 0; i < NUM_BUCKETS; i++) {
-        int bar_height = 0;
-
-        // Scale counts to the vertical space below the pegs.
-        if (histogram_max > 0) {
-            bar_height =
-                (histogram[i] * HIST_HEIGHT) / histogram_max;
-        }
-
-        if (bar_height > 0) {
-            int center_x =
-                LAST_ROW_FIRST_X +
-                i * PEG_SPACE -
-                PEG_SPACE / 2;
-
-            fillRect(
-                center_x - BAR_WIDTH / 2,
-                HIST_BOTTOM - bar_height,
-                BAR_WIDTH,
-                bar_height,
-                BLUE
-            );
+        totals[i] = histogram[0][i] + histogram[1][i];
+        if (totals[i] > max) max = totals[i];
+    }
+    if (max > 0) {
+        for (int i = 0; i < NUM_BUCKETS; i++) {
+            int bar_height = (totals[i] * HIST_HEIGHT) / max;
+            if (bar_height > 0) {
+                int center_x = LAST_ROW_FIRST_X + i * PEG_SPACE - PEG_SPACE / 2;
+                fillRect(center_x - BAR_WIDTH / 2, HIST_BOTTOM - bar_height,
+                         BAR_WIDTH, bar_height, BLUE);
+            }
         }
     }
-
     drawHLine(0, HIST_BOTTOM, 640, WHITE);
+}
+
+void resetStats(void) {
+    memset(histogram, 0, sizeof(histogram));
+    ball_count[0] = 0;
+    ball_count[1] = 0;
 }
 
 
@@ -435,9 +430,9 @@ fix15 clampFix(fix15 v, fix15 lo, fix15 hi) {
 
 // Clear the histogram and the total-fallen count
 void resetStats(void) {
-  memset(histogram, 0, sizeof(histogram));
-  histogram_max = 0;
-  ball_count = 0;
+  memset(histogram, 0, sizeof(histogram));   // clears both cores' rows
+  ball_count[0] = 0;
+  ball_count[1] = 0;
 }
 
 // Add or remove balls; new balls start fresh at the top
@@ -609,12 +604,14 @@ void updateBallPos(Ball *ball){
   handlePegCollisions(ball);
 
   // If ball reaches top of histogram, drop again from top
+    // If ball reaches top of histogram, drop again from top
   if (ball->y >= int2fix15(HIST_TOP)) {
-    addToHistogram(fix2int15(ball->x));
+    int core = get_core_num();                       // 0 or 1
+    histogram[core][bucketForX(fix2int15(ball->x))]++;
+    ball_count[core]++;
     spawnBall(ball);
-    ball_count++;
     return;
-}
+  }
   ball->vy += gravity;
 }
 
@@ -754,13 +751,14 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 
       // Clear the buffer
       clearLowFrame(0, BLACK);
+      sem_release(&draw_semaphore);   // wake core 1
 
       // On-screen info
       sprintf(text, "Mode: %s", mode_names[mode]);
       drawTextGLCD(10, 10, text, WHITE, BLACK);
       sprintf(text, "# of balls: %d", current_ball_count);
       drawTextGLCD(10, 20, text, WHITE, BLACK);
-      sprintf(text, "Total balls: %u", (unsigned)ball_count);
+      sprintf(text, "Total balls: %u", (unsigned)(ball_count[0] + ball_count[1]));
       drawTextGLCD(10, 30, text, WHITE, BLACK);
       sprintf(text, "Bounciness: %.2f", fix2float15(bounciness));
       drawTextGLCD(10, 40, text, WHITE, BLACK);
@@ -774,11 +772,12 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       // Draw the pegs
       drawPegs();
 
-      // Update and draw every active ball
-      for (int i = 0; i < current_ball_count; i++) {
+      for (int i = 0; i < current_ball_count / 2; i++) {
         updateBallPos(&balls[i]);
         drawBall(&balls[i]);
       }
+
+      PT_SEM_SDK_WAIT(pt, &done_semaphore);   // wait for core 1
 
       // Draw the histogram
       drawHistogram();
@@ -792,36 +791,33 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 
 // Animation on core 1
 
-// static PT_THREAD (protothread_anim1(struct pt *pt))
-// {
-//     // Mark beginning of thread
-//     PT_BEGIN(pt);
+static PT_THREAD (protothread_anim1(struct pt *pt))
+{
+    // Mark beginning of thread
+    PT_BEGIN(pt);
 
 
-//     while(1) {
-//       // Wait for the signal from core 0
-//       PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
-//       // update boid's position and velocity
-//       // Update and draw every active ball
-//       for (int i = 0; i < current_ball_count; i++) {
-//         updateBallPos(&balls[i]);
-//         drawBall(&balls[i]);
-//       }
-//      // NEVER exit while
-//     } // END WHILE(1)
-//   PT_END(pt);
-// } // animation thread
+    while(1) {
+      PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
+      for (int i = current_ball_count / 2; i < current_ball_count; i++) {
+        updateBallPos(&balls[i]);
+        drawBall(&balls[i]);
+      }
+      sem_release(&done_semaphore);
+    }
+  PT_END(pt);
+} // animation thread
 
-// // ========================================
-// // === core 1 main -- started in main below
-// // ========================================
-// void core1_main(){
-//   // Add animation thread
-//   pt_add_thread(protothread_anim1);
-//   // Start the scheduler
-//   pt_schedule_start ;
+// ========================================
+// === core 1 main -- started in main below
+// ========================================
+void core1_main(){
+  // Add animation thread
+  pt_add_thread(protothread_anim1);
+  // Start the scheduler
+  pt_schedule_start ;
 
-// }
+}
 
 
 // ========================================
@@ -854,6 +850,10 @@ int main(){
   // Initialize the semaphore
   // Arguments: pointer to sem, initial count, max count
   sem_init(&draw_semaphore, 0, 1) ;
+  sem_init(&done_semaphore, 0, 1) ;
+
+  multicore_reset_core1();
+  multicore_launch_core1(&core1_main);
 
   // start core 1 
   //multicore_reset_core1();
