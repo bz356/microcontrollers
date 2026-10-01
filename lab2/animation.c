@@ -236,8 +236,8 @@ void enc_init(void)
 // fix15 boid1_vx ;
 // fix15 boid1_vy ;
 
-#define BALL_RADIUS 2
-#define PEG_RADIUS 4
+#define BALL_RADIUS 4
+#define PEG_RADIUS 6
 
 #define COLLISION_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS)
 #define COLLISION_SQUARED  multfix15(COLLISION_DISTANCE, COLLISION_DISTANCE)
