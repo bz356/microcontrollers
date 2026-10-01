@@ -481,7 +481,7 @@ void handleInput(void) {
 
 // draw the ball
 void drawBall(Ball *ball) {
-  fillCircle(fix2int15(ball->x), fix2int15(ball->y), BALL_RADIUS, BLUE);
+  drawCircle(fix2int15(ball->x), fix2int15(ball->y), BALL_RADIUS, BLUE);
 }
 
 // Draw the boundaries
