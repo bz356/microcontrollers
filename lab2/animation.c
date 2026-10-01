@@ -508,7 +508,9 @@ void handlePegCollisions(Ball *ball) {
         ball->vy = ball->vy + multfix15(normal_y, intermediate_term) ;
 
         if(i != ball->last_peg){
-          thunk() ; // Play sound on collision with NEW peg
+          if(dma_channel_is_busy(data_chan)){
+              thunk() ; // Play sound on collision with NEW peg
+          }
 
           // Lose some energy during the bounce
           ball->vx = multfix15(bounciness, ball->vx) ;
