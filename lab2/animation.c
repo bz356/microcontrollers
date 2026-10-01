@@ -96,9 +96,9 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 2000
+#define MAX_BALLS 10000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 100
+#define START_BALLS 2000
 
 typedef struct Ball {
   fix15 x; 
@@ -374,10 +374,11 @@ void drawHistogram(void) {
     drawHLine(0, HIST_BOTTOM, 640, WHITE);
 }
 
+// Clear the histogram and the total-fallen count
 void resetStats(void) {
-    memset(histogram, 0, sizeof(histogram));
-    ball_count[0] = 0;
-    ball_count[1] = 0;
+  memset(histogram, 0, sizeof(histogram));   // clears both cores' rows
+  ball_count[0] = 0;
+  ball_count[1] = 0;
 }
 
 
@@ -428,12 +429,7 @@ fix15 clampFix(fix15 v, fix15 lo, fix15 hi) {
   return v;
 }
 
-// Clear the histogram and the total-fallen count
-void resetStats(void) {
-  memset(histogram, 0, sizeof(histogram));   // clears both cores' rows
-  ball_count[0] = 0;
-  ball_count[1] = 0;
-}
+
 
 // Add or remove balls; new balls start fresh at the top
 void changeBallCount(int clicks) {
