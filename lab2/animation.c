@@ -98,7 +98,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball definition
 #define MAX_BALLS 2000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 600
+#define START_BALLS 1000
 
 typedef struct Ball {
   fix15 x; 
@@ -406,7 +406,7 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
 
 void spawnBall(Ball *ball) {
   ball->x = int2fix15(320);
-  ball->y = int2fix15(30);
+  ball->y = int2fix15(0);
 
   // Randomized horizontal velocity
   int32_t offset_milli = (int32_t)(rand() % 401) - 200;
@@ -465,7 +465,7 @@ void handleInput(void) {
       changeBallCount(clicks);
       break;
     case MODE_BOUNCE:
-      bounciness = clampFix(bounciness + clicks * float2fix15(0.05), 0, int2fix15(1));
+      bounciness = clampFix(bounciness + clicks * float2fix15(0.05), 0, int2fix15(2));
       break;
     case MODE_GRAVITY:
       gravity = clampFix(gravity + clicks * float2fix15(0.02), float2fix15(0.02), int2fix15(2));
@@ -603,28 +603,27 @@ void updateBallPos(Ball *ball){
   ball->vy += gravity;
 }
 
-
 // Detect wallstrikes, update velocity and position
 // void wallsAndEdges(fix15* x, fix15* y, fix15* vx, fix15* vy)
 // {
 //   // Reverse direction if we've hit a wall
-//   // if (hitTop(*y)) {
-//   //   *vy = (-*vy) ;
-//   //   *y  = (*y + int2fix15(5)) ;
-//   // }
-//   // if (hitBottom(*y)) {
-//   //   *vy = (-*vy) ;
-//   //   *y  = (*y - int2fix15(5)) ;
-//   // } 
-//   // if (hitRight(*x)) {
-//   //   *vx = (-*vx) ;
-//   //   *x  = (*x - int2fix15(5)) ;
-//   // }
-//   // if (hitLeft(*x)) {
-//   //   *vx = (-*vx) ;
-//   //   *x  = (*x + int2fix15(5)) ;
-//   // } 
-
+//   if (hitTop(*y)) {
+//     *vy = (-*vy) ;
+//     *y  = (*y + int2fix15(5)) ;
+//   }
+//   if (hitBottom(*y)) {
+//     *vy = (-*vy) ;
+//     *y  = (*y - int2fix15(5)) ;
+//   } 
+//   if (hitRight(*x)) {
+//     *vx = (-*vx) ;
+//     *x  = (*x - int2fix15(5)) ;
+//   }
+//   if (hitLeft(*x)) {
+//     *vx = (-*vx) ;
+//     *x  = (*x + int2fix15(5)) ;
+//   } 
+// }
 //   // Update position using velocity
 //   *x = *x + *vx ;
 //   *y = *y + *vy ;
@@ -777,38 +776,38 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 } // animation thread
 
 // Animation on core 1
-/*
-static PT_THREAD (protothread_anim1(struct pt *pt))
-{
-    // Mark beginning of thread
-    PT_BEGIN(pt);
 
-    // Spawn a boid
-    spawnBoid(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy, 1);
+// static PT_THREAD (protothread_anim1(struct pt *pt))
+// {
+//     // Mark beginning of thread
+//     PT_BEGIN(pt);
 
-    while(1) {
-      // Wait for the signal from core 0
-      PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
-      // update boid's position and velocity
-      wallsAndEdges(&boid1_x, &boid1_y, &boid1_vx, &boid1_vy) ;
-      // draw the boid at its new position
-      fillCircle(fix2int15(boid1_x), fix2int15(boid1_y), 15, color); 
-     // NEVER exit while
-    } // END WHILE(1)
-  PT_END(pt);
-} // animation thread
 
-// ========================================
-// === core 1 main -- started in main below
-// ========================================
-void core1_main(){
-  // Add animation thread
-  pt_add_thread(protothread_anim1);
-  // Start the scheduler
-  pt_schedule_start ;
+//     while(1) {
+//       // Wait for the signal from core 0
+//       PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
+//       // update boid's position and velocity
+//       // Update and draw every active ball
+//       for (int i = 0; i < current_ball_count; i++) {
+//         updateBallPos(&balls[i]);
+//         drawBall(&balls[i]);
+//       }
+//      // NEVER exit while
+//     } // END WHILE(1)
+//   PT_END(pt);
+// } // animation thread
 
-}
-*/
+// // ========================================
+// // === core 1 main -- started in main below
+// // ========================================
+// void core1_main(){
+//   // Add animation thread
+//   pt_add_thread(protothread_anim1);
+//   // Start the scheduler
+//   pt_schedule_start ;
+
+// }
+
 
 // ========================================
 // === main
