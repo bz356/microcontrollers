@@ -236,7 +236,7 @@ void enc_init(void)
 // fix15 boid1_vx ;
 // fix15 boid1_vy ;
 
-#define BALL_RADIUS 4
+#define BALL_RADIUS 2
 #define PEG_RADIUS 6
 
 #define COLLISION_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS)
@@ -529,11 +529,11 @@ void drawPegs() {
     short x = (short)fix2int15(pegs[i].x);
     short y = (short)fix2int15(pegs[i].y);
 
-    //drawCircle(fix2int15(pegs[i].x), fix2int15(pegs[i].y), PEG_RADIUS, WHITE);
-    drawPixel(x + PEG_RADIUS, y, WHITE); // right
-    drawPixel(x - PEG_RADIUS, y, WHITE); // left
-    drawPixel(x, y + PEG_RADIUS, WHITE); // down
-    drawPixel(x, y - PEG_RADIUS, WHITE); // up
+    drawCircle(x, y, PEG_RADIUS, WHITE);
+    // drawPixel(x + PEG_RADIUS, y, WHITE); // right
+    // drawPixel(x - PEG_RADIUS, y, WHITE); // left
+    // drawPixel(x, y + PEG_RADIUS, WHITE); // down
+    // drawPixel(x, y - PEG_RADIUS, WHITE); // up
   }
   
 }
