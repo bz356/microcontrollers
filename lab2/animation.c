@@ -243,6 +243,7 @@ fix15 gravity = float2fix15(0.37) ;
 fix15 bounciness = float2fix15(0.5) ;
 
 int global_ctr_chan;
+int global_data_chan;
 
 // Create a semaphore
 semaphore_t draw_semaphore ;
@@ -535,7 +536,7 @@ void handlePegCollisions(Ball *ball) {
   int by = fix2int15(ball->y);
   int row = (by - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
   if (row < 0 || row >= NUM_ROWS) {
-    ball->last_peg = -1;
+    //ball->last_peg = -1;
     return;
   }
 
@@ -554,7 +555,7 @@ void handlePegCollisions(Ball *ball) {
 
   // Cheap bounding-box test first
   if ((absfix15(dx) >= collision_distance) || (absfix15(dy) >= collision_distance)) {
-    ball->last_peg = -1;
+    //ball->last_peg = -1;
     return;
   }
 
@@ -564,7 +565,7 @@ void handlePegCollisions(Ball *ball) {
   float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
 
   if ((distance >= (BALL_RADIUS + PEG_RADIUS)) || (distance <= 0)) {
-    ball->last_peg = -1;
+    //ball->last_peg = -1;
     return;
   }
 
@@ -603,7 +604,7 @@ void updateBallPos(Ball *ball){
       return;
   }
   
-  fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
+  //fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
 
   handlePegCollisions(ball);
 
