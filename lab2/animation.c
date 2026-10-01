@@ -236,8 +236,11 @@ void enc_init(void)
 // fix15 boid1_vx ;
 // fix15 boid1_vy ;
 
-#define BALL_RADIUS 4
-#define PEG_RADIUS 6
+#define BALL_RADIUS 2
+#define PEG_RADIUS 4
+
+#define COLLISION_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS)
+#define COLLISION_SQUARED  multfix15(COLLISION_DISTANCE, COLLISION_DISTANCE)
 
 // fix15 peg_x = int2fix15(320) ;
 // fix15 peg_y = int2fix15(240) ;
@@ -520,7 +523,6 @@ void drawPegs() {
 }
 
 void handlePegCollisions(Ball *ball) {
-  fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
 
   // Which row is the ball closest to? Rows are 19 px apart and collisions
   // need < 10 px, so only the nearest row can be hit.
@@ -544,44 +546,87 @@ void handlePegCollisions(Ball *ball) {
   fix15 dx = ball->x - pegs[i].x;
   fix15 dy = ball->y - pegs[i].y;
 
-  // Cheap bounding-box test first
-  if ((absfix15(dx) >= collision_distance) || (absfix15(dy) >= collision_distance)) {
+  // If we were touching a peg before, check whether we've moved away from it
+  if (ball->last_peg >= 0) {
+      fix15 last_dx = ball->x - pegs[ball->last_peg].x;
+      fix15 last_dy = ball->y - pegs[ball->last_peg].y;
+
+      fix15 release_distance =
+          int2fix15(BALL_RADIUS + PEG_RADIUS + 2);
+
+      // Once clearly outside the previous peg, allow another thunk later
+      if (absfix15(last_dx) >= release_distance || absfix15(last_dy) >= release_distance) {
+          ball->last_peg = -1;
+      }
+  }
+
+  // cheap bounding check 
+  if(absfix15(dx) >= COLLISION_DISTANCE || absfix15(dy) >= COLLISION_DISTANCE){
+    return;
+  }
+
+  fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+
+
+
+  // float dx_float = fix2float15(dx) ;
+  // float dy_float = fix2float15(dy) ;
+
+  // float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+
+  if ((dist_squared >= COLLISION_SQUARED) || dist_squared == 0) {
     //ball->last_peg = -1;
     return;
   }
 
-  float dx_float = fix2float15(dx) ;
-  float dy_float = fix2float15(dy) ;
+  // WANNA DO UNNORMALIZED VECTOR CALCULATION HERE INSETAD 
+  fix15 dot = multfix15(ball->vx, dx) + multfix15(ball->vy, dy);
 
-  float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+  // only reflect if ball is moving INTO the peg 
+  if(dot < 0){
 
-  if ((distance >= (BALL_RADIUS + PEG_RADIUS)) || (distance <= 0)) {
-    //ball->last_peg = -1;
-    return;
+    // factor = -2(v dot d) / (d dot d)
+    fix15 factor = divfix(-2 * dot, dist_squared);
+
+    // v' = v + factor * d 
+    ball->vx += multfix15(factor, dx);
+    ball->vy += multfix15(factor, dy);
+
+    // Push ball just outside the peg 
+    float dx_float = fix2float15(dx);
+    float dy_float = fix2float15(dy);
+
+    float distance = sqrt(dx_float * dx_float + dy_float * dy_float);
+
+    fix15 normal_x = float2fix15(dx_float / distance);
+    fix15 normal_y = float2fix15(dy_float / distance);
+
+    fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
+
+    ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+    ball->y = pegs[i].y + multfix15(normal_y, push_distance);
+
+      // Only thunk and lose energy on a NEW peg
+    if (i != ball->last_peg) {
+      thunk();
+      ball->vx = multfix15(bounciness, ball->vx);
+      ball->vy = multfix15(bounciness, ball->vy);
+      ball->last_peg = i;
+    }
+
   }
 
-  // Unit normal pointing from peg to ball
-  fix15 normal_x = float2fix15(dx_float / distance) ;
-  fix15 normal_y = float2fix15(dy_float / distance) ;
+  // fix15 intermediate_term =
+  //     -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy));
 
-  fix15 intermediate_term =
-      -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy));
+  // // Move ball just outside the peg
+  // ball->x = pegs[i].x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
+  // ball->y = pegs[i].y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
 
-  // Move ball just outside the peg
-  ball->x = pegs[i].x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
-  ball->y = pegs[i].y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
+  // // Reflect velocity off the peg
+  // ball->vx = ball->vx + multfix15(normal_x, intermediate_term);
+  // ball->vy = ball->vy + multfix15(normal_y, intermediate_term);
 
-  // Reflect velocity off the peg
-  ball->vx = ball->vx + multfix15(normal_x, intermediate_term);
-  ball->vy = ball->vy + multfix15(normal_y, intermediate_term);
-
-  // Only thunk and lose energy on a NEW peg
-  if (i != ball->last_peg) {
-    thunk();
-    ball->vx = multfix15(bounciness, ball->vx);
-    ball->vy = multfix15(bounciness, ball->vy);
-    ball->last_peg = i;
-  }
 }
 
 // used to be wallsAndEdges
