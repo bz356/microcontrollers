@@ -369,7 +369,7 @@ void drawHistogram(void) {
             int bar_height = (totals[i] * HIST_HEIGHT) / max;
             if (bar_height > 0) {
                 int center_x = LAST_ROW_FIRST_X + i * PEG_SPACE - PEG_SPACE / 2;
-                fillRect(center_x - BAR_WIDTH / 2, HIST_BOTTOM - bar_height,
+                drawRect(center_x - BAR_WIDTH / 2, HIST_BOTTOM - bar_height,
                          BAR_WIDTH, bar_height, BLUE);
             }
         }
@@ -481,7 +481,16 @@ void handleInput(void) {
 
 // draw the ball
 void drawBall(Ball *ball) {
-  drawCircle(fix2int15(ball->x), fix2int15(ball->y), BALL_RADIUS, BLUE);
+  //drawCircle(fix2int15(ball->x), fix2int15(ball->y), BALL_RADIUS, BLUE);
+  short x = (short)fix2int15(ball->x);
+  short y = (short)fix2int15(ball->y);
+
+  drawPixel(x + BALL_RADIUS, y, BLUE); // right
+  drawPixel(x - BALL_RADIUS, y, BLUE); // left
+  drawPixel(x, y + BALL_RADIUS, BLUE); // down
+  drawPixel(x, y - BALL_RADIUS, BLUE); // up
+
+
 }
 
 // Draw the boundaries
@@ -517,7 +526,14 @@ void initPegs() {
 void drawPegs() {
 
   for(int i = 0; i < NUM_PEGS; i++){
-    fillCircle(fix2int15(pegs[i].x), fix2int15(pegs[i].y), PEG_RADIUS, WHITE);
+    short x = (short)fix2int15(pegs[i].x);
+    short y = (short)fix2int15(pegs[i].y);
+
+    //drawCircle(fix2int15(pegs[i].x), fix2int15(pegs[i].y), PEG_RADIUS, WHITE);
+    drawPixel(x + PEG_RADIUS, y, WHITE); // right
+    drawPixel(x - PEG_RADIUS, y, WHITE); // left
+    drawPixel(x, y + PEG_RADIUS, WHITE); // down
+    drawPixel(x, y - PEG_RADIUS, WHITE); // up
   }
   
 }
