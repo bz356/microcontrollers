@@ -1,10 +1,5 @@
 
-/**
- * Hunter Adams (vha3@cornell.edu)
- * 
- * This demonstration animates two balls bouncing about the screen.
- * Through a serial interface, the user can change the ball color.
- *
+/*
  * HARDWARE CONNECTIONS (WEEK 1 FOCUS)
 
  VGA (resistors for voltage division to VGA analog input)
@@ -71,12 +66,6 @@ typedef signed int fix15 ;
 #define char2fix15(a) (fix15)(((fix15)(a)) << 15)
 #define divfix(a,b) (fix15)(div_s64s64( (((signed long long)(a)) << 15), ((signed long long)(b))))
 
-// Wall detection
-#define hitBottom(b) (b>int2fix15(380))
-#define hitTop(b) (b<int2fix15(100))
-#define hitLeft(a) (a<int2fix15(100))
-#define hitRight(a) (a>int2fix15(540))
-
 // Rotary Encoder
 #define ENC_A  10
 #define ENC_B  11
@@ -137,16 +126,13 @@ typedef struct Peg {
 
 Peg pegs[NUM_PEGS];
 
-// Number of DMA transfers per event
-const uint32_t transfer_count = sine_table_size ;
 
-
-volatile int enc_change = 0; // clicks since the animation thread last checked (+ = clockwise)
+volatile int enc_delta = 0; // clicks since the animation thread last checked (+ = clockwise)
 static volatile uint8_t enc_state; // state of pins A and B written in last 2 bits as AB
 static volatile int8_t enc_accum; // quarter step count of pins A and B
 
 volatile bool enc_sw_pressed = false; // flag set by interrupt when switch is pressed
-static volatile uint32_t enc_sw_last_edge;
+static volatile uint32_t enc_sw_last_edge; // time of last switch edge for debouncing
 
 // read from old to new, +1 or -1 on valid one-step turns and 0 for no turn or impossible two-step turn
 
@@ -182,11 +168,6 @@ const char *mode_names[NUM_MODES] = { "Ball count", "Bounciness", "Gravity" };
 // Frame timing
 #define FRAME_US 16667 // 1/60 s in microseconds
 #define LED_PIN PICO_DEFAULT_LED_PIN
-
-// alpha max plus beta min: dist ~= alpha*max(|dx|,|dy|) + beta*min(|dx|,|dy|)
-#define AMBM_ALPHA float2fix15(0.96043387)
-#define AMBM_BETA  float2fix15(0.39782473)
-
 
 void enc_callback(uint gpio, uint32_t events)
 {
@@ -238,14 +219,13 @@ void enc_init(void)
 }
 
 // the color of the boid
-char color = WHITE ;
+// char color = WHITE ;
 
 // Boid on core 0
 // fix15 boid0_x ;
 // fix15 boid0_y ;
 // fix15 boid0_vx ;
 // fix15 boid0_vy ;
-
 
 // // Boid on core 1
 // fix15 boid1_x ;
@@ -565,31 +545,26 @@ void handlePegCollisions(Ball *ball) {
 
   fix15 dx = ball->x - pegs[i].x;
   fix15 dy = ball->y - pegs[i].y;
-  fix15 adx = absfix15(dx);
-  fix15 ady = absfix15(dy);
 
   // Cheap bounding-box test first
-  if (adx >= collision_distance || ady >= collision_distance) {
+  if ((absfix15(dx) >= collision_distance) || (absfix15(dy) >= collision_distance)) {
     ball->last_peg = -1;
     return;
   }
 
-  // Alpha max plus beta min instead of sqrt
-  fix15 distance;
-  if (adx > ady) {
-    distance = multfix15(AMBM_ALPHA, adx) + multfix15(AMBM_BETA, ady);
-  } else {
-    distance = multfix15(AMBM_ALPHA, ady) + multfix15(AMBM_BETA, adx);
-  }
+  float dx_float = fix2float15(dx) ;
+  float dy_float = fix2float15(dy) ;
 
-  if (distance >= collision_distance || distance == 0) {
+  float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+
+  if ((distance >= (BALL_RADIUS + PEG_RADIUS)) || (distance <= 0)) {
     ball->last_peg = -1;
     return;
   }
 
   // Unit normal pointing from peg to ball
-  fix15 normal_x = divfix(dx, distance);
-  fix15 normal_y = divfix(dy, distance);
+  fix15 normal_x = float2fix15(dx_float / distance) ;
+  fix15 normal_y = float2fix15(dy_float / distance) ;
 
   fix15 intermediate_term =
       -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy));
@@ -730,10 +705,10 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         serial_read ;
         // convert input string to number
         sscanf(pt_serial_in_buffer,"%d", &user_input) ;
-        // update boid color
-        if ((user_input > 0) && (user_input < 16)) {
-          color = (char)user_input ;
-        }
+        // update boid color (color no longer used)
+        // if ((user_input > 0) && (user_input < 16)) {
+        //   color = (char)user_input ;
+        // }
       } // END WHILE(1)
   PT_END(pt);
 } // timer thread
