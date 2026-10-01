@@ -1,10 +1,5 @@
 
-/**
- * Hunter Adams (vha3@cornell.edu)
- * 
- * This demonstration animates two balls bouncing about the screen.
- * Through a serial interface, the user can change the ball color.
- *
+/*
  * HARDWARE CONNECTIONS (WEEK 1 FOCUS)
 
  VGA (resistors for voltage division to VGA analog input)
@@ -29,7 +24,6 @@
   - GPIO 11 ---> B
   - GPIO 12 ---> SWITCH
   - GND     ---> C, other SWITCH PIN
-
 
  *
  * RESOURCES USED
@@ -72,12 +66,6 @@ typedef signed int fix15 ;
 #define char2fix15(a) (fix15)(((fix15)(a)) << 15)
 #define divfix(a,b) (fix15)(div_s64s64( (((signed long long)(a)) << 15), ((signed long long)(b))))
 
-// Wall detection
-#define hitBottom(b) (b>int2fix15(380))
-#define hitTop(b) (b<int2fix15(100))
-#define hitLeft(a) (a<int2fix15(100))
-#define hitRight(a) (a>int2fix15(540))
-
 // Rotary Encoder
 #define ENC_A  10
 #define ENC_B  11
@@ -108,7 +96,9 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 1000 
+#define MAX_BALLS 2000
+// Ball count at reset: tune to the largest value that keeps the LED off
+#define START_BALLS 600
 
 typedef struct Ball {
   fix15 x; 
@@ -120,7 +110,7 @@ typedef struct Ball {
 } Ball;
 
 Ball balls[MAX_BALLS];
-uint32_t current_ball_count = 350;
+int current_ball_count = START_BALLS;
 
 #define NUM_ROWS 16
 #define PEG_START_Y 60 // where the first peg starts
@@ -136,16 +126,13 @@ typedef struct Peg {
 
 Peg pegs[NUM_PEGS];
 
-// Number of DMA transfers per event
-const uint32_t transfer_count = sine_table_size ;
 
-
-volatile int enc_count = 0; // number shown on VGA
+volatile int enc_delta = 0; // clicks since the animation thread last checked (+ = clockwise)
 static volatile uint8_t enc_state; // state of pins A and B written in last 2 bits as AB
 static volatile int8_t enc_accum; // quarter step count of pins A and B
 
 volatile bool enc_sw_pressed = false; // flag set by interrupt when switch is pressed
-static volatile uint32_t enc_sw_last_edge;
+static volatile uint32_t enc_sw_last_edge; // time of last switch edge for debouncing
 
 // read from old to new, +1 or -1 on valid one-step turns and 0 for no turn or impossible two-step turn
 
@@ -173,6 +160,14 @@ int histogram[NUM_BUCKETS] = {0};
 uint32_t ball_count = 0;
 int histogram_max = 0;
 
+// button cycles through different modes after clicking
+typedef enum { MODE_BALLS, MODE_BOUNCE, MODE_GRAVITY, NUM_MODES } Mode;
+Mode mode = MODE_BALLS;
+const char *mode_names[NUM_MODES] = { "Ball count", "Bounciness", "Gravity" };
+
+// Frame timing
+#define FRAME_US 16667 // 1/60 s in microseconds
+#define LED_PIN PICO_DEFAULT_LED_PIN
 
 void enc_callback(uint gpio, uint32_t events)
 {
@@ -183,20 +178,14 @@ void enc_callback(uint gpio, uint32_t events)
 
     if (new_state == 0b11) 
     {
-      if (enc_accum >= 4) 
-      {
-        if (current_ball_count < MAX_BALLS) {
-          current_ball_count++;
-        }
-        enc_count++;
+      if (enc_accum >= 4) {
+        enc_delta++;
       }
-      else if (enc_accum <= -4)
-      {
-        if (current_ball_count > 0) {
-          current_ball_count--;
-        }
-        enc_count--;
+
+      else if (enc_accum <= -4) {
+        enc_delta--;
       }
+
       enc_accum = 0;
     }
   }
@@ -230,14 +219,13 @@ void enc_init(void)
 }
 
 // the color of the boid
-char color = WHITE ;
+// char color = WHITE ;
 
 // Boid on core 0
 // fix15 boid0_x ;
 // fix15 boid0_y ;
 // fix15 boid0_vx ;
 // fix15 boid0_vy ;
-
 
 // // Boid on core 1
 // fix15 boid1_x ;
@@ -429,7 +417,65 @@ void spawnBall(Ball *ball) {
   ball->vx = float2fix15(offset_milli / 1000.0f);
   ball->vy = 0; 
   ball->last_peg = -1; // at the top, did not hit any peg yet 
-  
+}
+
+// Keep a fix15 value between lo and hi
+fix15 clampFix(fix15 v, fix15 lo, fix15 hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
+// Clear the histogram and the total-fallen count
+void resetStats(void) {
+  memset(histogram, 0, sizeof(histogram));
+  histogram_max = 0;
+  ball_count = 0;
+}
+
+// Add or remove balls; new balls start fresh at the top
+void changeBallCount(int clicks) {
+  int n = current_ball_count + clicks;
+  if (n < 0) n = 0;
+  if (n > MAX_BALLS) n = MAX_BALLS;
+  for (int i = current_ball_count; i < n; i++) {
+    spawnBall(&balls[i]);
+  }
+  current_ball_count = n;
+}
+
+// Called once per frame: apply button presses and encoder clicks
+void handleInput(void) {
+  // Button: go to the next mode
+  if (enc_sw_pressed) {
+    enc_sw_pressed = false;
+    mode = (mode + 1) % NUM_MODES;
+  }
+
+  // Grab the clicks with interrupts off so the ISR can't change enc_delta mid-read
+  uint32_t irq_state = save_and_disable_interrupts();
+  int clicks = enc_delta;
+  enc_delta = 0;
+  restore_interrupts(irq_state);
+
+  if (clicks == 0) return;
+
+  switch (mode) {
+    case MODE_BALLS:
+      changeBallCount(clicks);
+      break;
+    case MODE_BOUNCE:
+      bounciness = clampFix(bounciness + clicks * float2fix15(0.05), 0, int2fix15(1));
+      break;
+    case MODE_GRAVITY:
+      gravity = clampFix(gravity + clicks * float2fix15(0.02), float2fix15(0.02), int2fix15(2));
+      break;
+    default:
+      break;
+  }
+
+  // Any parameter change resets the stats
+  resetStats();
 }
 
 // draw the ball
@@ -478,58 +524,66 @@ void drawPegs() {
 void handlePegCollisions(Ball *ball) {
   fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
 
-  for(int i = 0; i < NUM_PEGS; i++){
-
-     // Check for collision with peg
-    fix15 dx = ball->x - pegs[i].x;
-    fix15 dy = ball->y - pegs[i].y;
-
-    if ((absfix15(dx) < collision_distance) && (absfix15(dy) < collision_distance)) {
-
-      float dx_float = fix2float15(dx) ;
-      float dy_float = fix2float15(dy) ;
-
-      float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
-
-      if ((distance < (BALL_RADIUS + PEG_RADIUS)) && (distance > 0)) {
-
-        fix15 normal_x = float2fix15(dx_float / distance) ;
-        fix15 normal_y = float2fix15(dy_float / distance) ;
-
-        fix15 intermediate_term =
-            -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy)) ;
-
-        // Move ball just outside the peg
-        ball->x = pegs[i].x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
-        ball->y = pegs[i].y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1)) ;
-
-        // Change velocity so the ball bounces
-        ball->vx = ball->vx + multfix15(normal_x, intermediate_term) ;
-        ball->vy = ball->vy + multfix15(normal_y, intermediate_term) ;
-
-        if(i != ball->last_peg){
-          if(dma_channel_is_busy(data_chan)){
-              thunk() ; // Play sound on collision with NEW peg
-          }
-
-          // Lose some energy during the bounce
-          ball->vx = multfix15(bounciness, ball->vx) ;
-          ball->vy = multfix15(bounciness, ball->vy) ;
-
-          ball->last_peg = i;
-
-        }
-
-        return;
-
-
-      }
-  
-    }
-
+  // Which row is the ball closest to? Rows are 19 px apart and collisions
+  // need < 10 px, so only the nearest row can be hit.
+  int by = fix2int15(ball->y);
+  int row = (by - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
+  if (row < 0 || row >= NUM_ROWS) {
+    ball->last_peg = -1;
+    return;
   }
 
-  ball->last_peg = -1;
+  // Which peg in that row is closest horizontally?
+  int bx = fix2int15(ball->x);
+  int start_x = 320 - (row * PEG_SPACE) / 2;
+  int col = (bx - start_x + PEG_SPACE / 2) / PEG_SPACE;
+  if (col < 0) col = 0;
+  if (col > row) col = row;
+
+  // Row r starts at index r*(r+1)/2 in pegs[]
+  int i = row * (row + 1) / 2 + col;
+
+  fix15 dx = ball->x - pegs[i].x;
+  fix15 dy = ball->y - pegs[i].y;
+
+  // Cheap bounding-box test first
+  if ((absfix15(dx) >= collision_distance) || (absfix15(dy) >= collision_distance)) {
+    ball->last_peg = -1;
+    return;
+  }
+
+  float dx_float = fix2float15(dx) ;
+  float dy_float = fix2float15(dy) ;
+
+  float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+
+  if ((distance >= (BALL_RADIUS + PEG_RADIUS)) || (distance <= 0)) {
+    ball->last_peg = -1;
+    return;
+  }
+
+  // Unit normal pointing from peg to ball
+  fix15 normal_x = float2fix15(dx_float / distance) ;
+  fix15 normal_y = float2fix15(dy_float / distance) ;
+
+  fix15 intermediate_term =
+      -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy));
+
+  // Move ball just outside the peg
+  ball->x = pegs[i].x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
+  ball->y = pegs[i].y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
+
+  // Reflect velocity off the peg
+  ball->vx = ball->vx + multfix15(normal_x, intermediate_term);
+  ball->vy = ball->vy + multfix15(normal_y, intermediate_term);
+
+  // Only thunk and lose energy on a NEW peg
+  if (i != ball->last_peg) {
+    thunk();
+    ball->vx = multfix15(bounciness, ball->vx);
+    ball->vy = multfix15(bounciness, ball->vy);
+    ball->last_peg = i;
+  }
 }
 
 // used to be wallsAndEdges
@@ -651,10 +705,10 @@ static PT_THREAD (protothread_serial(struct pt *pt))
         serial_read ;
         // convert input string to number
         sscanf(pt_serial_in_buffer,"%d", &user_input) ;
-        // update boid color
-        if ((user_input > 0) && (user_input < 16)) {
-          color = (char)user_input ;
-        }
+        // update boid color (color no longer used)
+        // if ((user_input > 0) && (user_input < 16)) {
+        //   color = (char)user_input ;
+        // }
       } // END WHILE(1)
   PT_END(pt);
 } // timer thread
@@ -664,58 +718,63 @@ static PT_THREAD (protothread_serial(struct pt *pt))
 // Animation on core 0
 static PT_THREAD (protothread_anim(struct pt *pt))
 {
-    static char rotary_text[30];
-    // Mark beginning of thread
+    // static because protothreads lose local variables across yields
+    static char text[40];
+    static uint32_t frame_start;
+    static int spare_us = FRAME_US;
+
     PT_BEGIN(pt);
 
-    // Spawn a boid
-    //spawnBoid(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy, 0);
-    // initialize all 10 balls
-    for(int i = 0; i < MAX_BALLS; i++){
+    // Start every ball at the top
+    for (int i = 0; i < MAX_BALLS; i++) {
       spawnBall(&balls[i]);
     }
 
     while(1) {
-      // Wait for the signal that the buffer's changed
+      // Wait for the VGA driver to swap buffers (60 Hz)
       PT_YIELD_UNTIL(pt, draw_start_signal()) ;
+      frame_start = time_us_32();
+
+      // Apply button presses and encoder clicks
+      handleInput();
+
       // Clear the buffer
       clearLowFrame(0, BLACK);
-      // Signal core 1 that it can start drawing
-      // PT_SEM_SDK_SIGNAL(pt, &draw_semaphore) ;
-      // update boid's position and velocity
 
-      // Display rotary encoder count, num of balls, total balls fall through, time since boot
-      sprintf(rotary_text, "Rotary: %d", enc_count);
-      drawTextGLCD(10, 10, rotary_text, WHITE, BLACK);
-      sprintf(rotary_text, "# of balls: %d", current_ball_count);
-      drawTextGLCD(10, 20, rotary_text, WHITE, BLACK);
-      sprintf(rotary_text, "Total Balls %d", ball_count);
-      drawTextGLCD(10, 30, rotary_text, WHITE, BLACK);
-      // fix15 time_since_boot = int2fix15(time_us_32()) / 1000000;
-      sprintf(rotary_text, "Time since boot (s) %d", time_us_64()/1000000ULL);
-      drawTextGLCD(10, 40, rotary_text, WHITE, BLACK);
-      //wallsAndEdges(&boid0_x, &boid0_y, &boid0_vx, &boid0_vy) ;
-      
-      // draw the pegs
-      // fillCircle(fix2int15(peg_x), fix2int15(peg_y), PEG_RADIUS, WHITE); 
+      // On-screen info
+      sprintf(text, "Mode: %s", mode_names[mode]);
+      drawTextGLCD(10, 10, text, WHITE, BLACK);
+      sprintf(text, "# of balls: %d", current_ball_count);
+      drawTextGLCD(10, 20, text, WHITE, BLACK);
+      sprintf(text, "Total balls: %u", (unsigned)ball_count);
+      drawTextGLCD(10, 30, text, WHITE, BLACK);
+      sprintf(text, "Bounciness: %.2f", fix2float15(bounciness));
+      drawTextGLCD(10, 40, text, WHITE, BLACK);
+      sprintf(text, "Gravity: %.2f", fix2float15(gravity));
+      drawTextGLCD(10, 50, text, WHITE, BLACK);
+      sprintf(text, "Time since boot (s): %d", (int)(time_us_64() / 1000000));
+      drawTextGLCD(10, 60, text, WHITE, BLACK);
+      sprintf(text, "Spare time (us): %d", spare_us);
+      drawTextGLCD(10, 70, text, WHITE, BLACK);
+
+      // Draw the pegs
       drawPegs();
 
-      // draw the ball
-      for(int i = 0; i < current_ball_count; i++){
+      // Update and draw every active ball
+      for (int i = 0; i < current_ball_count; i++) {
         updateBallPos(&balls[i]);
         drawBall(&balls[i]);
       }
 
-      // draw the histogram
+      // Draw the histogram
       drawHistogram();
 
-      // draw the boundaries
-      //drawArena() ;
-     // NEVER exit while
+      // How much of the 1/60 s frame was left over? Negative = deadline missed.
+      spare_us = FRAME_US - (int)(time_us_32() - frame_start);
+      gpio_put(LED_PIN, spare_us < 0);
     } // END WHILE(1)
   PT_END(pt);
 } // animation thread
-
 
 // Animation on core 1
 /*
@@ -764,6 +823,11 @@ int main(){
 
   // initialize rotary encoder
   enc_init();
+
+  // initialize LED that lights when a frame misses the 60 fps deadline
+  gpio_init(LED_PIN);
+  gpio_set_dir(LED_PIN, GPIO_OUT);
+  gpio_put(LED_PIN, 0);
 
   // initialize VGA
   initVGA() ;
