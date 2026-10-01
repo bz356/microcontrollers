@@ -271,6 +271,7 @@ static void dmaSetup(void) {
     int data_chan = dma_claim_unused_channel(true);;
     int ctrl_chan = dma_claim_unused_channel(true);;
     global_ctr_chan = ctrl_chan;
+    global_data_chan = data_chan;
 
     // Setup the control channel
     dma_channel_config c = dma_channel_get_default_config(ctrl_chan);   // default configs
@@ -318,7 +319,9 @@ static void dmaSetup(void) {
 }
 
 static void thunk(void) {
-  dma_start_channel_mask(1u << global_ctr_chan) ;
+  if(!dma_channel_is_busy(global_data_chan)){
+     dma_start_channel_mask(1u << global_ctr_chan) ;
+  }
 }
 
 // ==================================================
@@ -409,12 +412,15 @@ void spawnBall(Ball *ball) {
   ball->y = int2fix15(0);
 
   // Randomized horizontal velocity
-  int32_t offset_milli = (int32_t)(rand() % 401) - 200;
-  if (offset_milli == 0) {
-    offset_milli += (rand() & 1) ? 1 : -1;   // 50/50: either 1 or -1;
-  }
+  // int32_t offset_milli = (int32_t)(rand() % 401) - 200;
+  // if (offset_milli == 0) {
+  //   offset_milli += (rand() & 1) ? 1 : -1;   // 50/50: either 1 or -1;
+  // }
 
-  ball->vx = float2fix15(offset_milli / 1000.0f);
+  // dont use mod, it's too expensive! 
+  ball->vx = (rand() & 0xffff) - int2fix15(1);
+
+  // ball->vx = float2fix15(offset_milli / 1000.0f);
   ball->vy = 0; 
   ball->last_peg = -1; // at the top, did not hit any peg yet 
 }
@@ -590,6 +596,14 @@ void handlePegCollisions(Ball *ball) {
 void updateBallPos(Ball *ball){
   ball->x += ball->vx;
   ball->y += ball->vy;
+
+  // If ball goes off left or right side, respawn at the top
+  if (ball->x < int2fix15(BALL_RADIUS) || ball->x > int2fix15(640 - BALL_RADIUS)) {
+      spawnBall(ball);
+      return;
+  }
+  
+  fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
 
   handlePegCollisions(ball);
 
