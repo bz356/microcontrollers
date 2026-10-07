@@ -58,8 +58,8 @@
 // === the fixed point macros ========================================
 typedef signed int fix15 ;
 #define multfix15(a,b) ((fix15)((((signed long long)(a))*((signed long long)(b)))>>15))
-#define float2fix15(a) ((fix15)((a)*32768.0)) // 2^15
-#define fix2float15(a) ((float)(a)/32768.0)
+#define float2fix15(a) ((fix15)((a)*32768.0f)) // 2^15
+#define fix2float15(a) ((float)(a)/32768.0f)
 #define absfix15(a) abs(a) 
 #define int2fix15(a) ((fix15)(a << 15))
 #define fix2int15(a) ((int)(a >> 15))
@@ -555,7 +555,7 @@ void handlePegCollisions(Ball *ball) {
   float dx_float = fix2float15(dx) ;
   float dy_float = fix2float15(dy) ;
 
-  float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+  float distance = sqrtf((dx_float * dx_float) + (dy_float * dy_float)) ;
 
   if ((distance >= (BALL_RADIUS + PEG_RADIUS)) || (distance <= 0)) {
     ball->last_peg = -1;
