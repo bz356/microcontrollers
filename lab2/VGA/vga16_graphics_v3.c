@@ -69,11 +69,11 @@ DrawPixel is faster
 // VGA timing constants
 #define H_ACTIVE   655    // (active + frontporch - 1) - one cycle delay for mov
 #define V_ACTIVE   479    // (active - 1)
-#define RGB_ACTIVE 319    // (horizontal active)/2 - 1
+#define RGB_ACTIVE 639    // pixels per line - 1 (one pixel per PIO loop)
 // #define RGB_ACTIVE 639 // change to this if 1 pixel/byte
 
 // Length of the pixel array, and number of DMA transfers
-#define VGA_BUFFER_COUNT 153600 // Total pixels/2 (since we have 2 pixels per byte)
+#define VGA_BUFFER_COUNT 38400 // eight pixels per byte, 640 x 480
 
 // ===============================
 // !!!=========================!!!
@@ -91,12 +91,12 @@ DrawPixel is faster
 // Pixel color array that is DMAed to the PIO machines and
 // a pointer to the ADDRESS of this color array.
 // Note that this array is automatically initialized to all 0's (black)
-unsigned char vga_buffer_0[VGA_BUFFER_COUNT];
+unsigned char vga_buffer_0[VGA_BUFFER_COUNT] __attribute__((aligned(4)));
 char * pointer_vga_buffer_0 = &vga_buffer_0[0] ;
 //
 // only define second buffer if necessary
 #ifndef DOUBLE_BUFFER_NONE
-  unsigned char vga_buffer_1[VGA_BUFFER_COUNT];
+  unsigned char vga_buffer_1[VGA_BUFFER_COUNT] __attribute__((aligned(4)));
   char * pointer_vga_buffer_1 = &vga_buffer_1[0] ;
 #endif
 //
@@ -251,7 +251,7 @@ void initVGA() {
 
     // data_chan (sends color data to PIO VGA machine)
     dma_channel_config c0 = dma_channel_get_default_config(rgb_data_chan);  // default configs
-    channel_config_set_transfer_data_size(&c0, DMA_SIZE_8);              // 8-bit txfers
+    channel_config_set_transfer_data_size(&c0, DMA_SIZE_32);              // 32-bit txfers
     channel_config_set_read_increment(&c0, true);                        // yes read incrementing
     channel_config_set_write_increment(&c0, false);                      // no write incrementing
     channel_config_set_dreq(&c0, DREQ_PIO0_TX2) ;                        // DREQ_PIO0_TX2 pacing (FIFO)
@@ -259,11 +259,11 @@ void initVGA() {
     channel_config_set_high_priority (&c0, rgb_high_priority) ;
 
     dma_channel_configure(
-        rgb_data_chan,                 // Channel to be configured
+        rgb_data_chan,              // Channel to be configured
         &c0,                        // The configuration we just created
         &pio->txf[rgb_sm],          // write address (RGB PIO TX FIFO)
-        &vga_buffer_0,            // The initial read address (pixel color array)
-        VGA_BUFFER_COUNT,           // Number of transfers; in this case each is 1 byte.
+        &vga_buffer_0,              // The initial read address (pixel color array)
+        VGA_BUFFER_COUNT / 4,       // Number of transfers; each is 4 bytes
         false                       // Don't start immediately.
     );
 
