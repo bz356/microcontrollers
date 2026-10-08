@@ -104,6 +104,19 @@ fix15 boid1_y ;
 fix15 boid1_vx ;
 fix15 boid1_vy ;
 
+#define MAX_BALLS 10 
+
+struct Ball {
+  fix15 x; 
+  fix15 y;
+  fix15 vx; 
+  fix15 vy; 
+
+  int last_peg;
+} Ball;
+
+Balls balls[MAX_BALLS];
+
 // Create a semaphore
 semaphore_t draw_semaphore ;
 

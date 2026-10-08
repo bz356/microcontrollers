@@ -242,11 +242,15 @@ void enc_init(void)
 #define COLLISION_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS)
 #define COLLISION_SQUARED  multfix15(COLLISION_DISTANCE, COLLISION_DISTANCE)
 
+// 0.5 in fix15 = 2^14
+//#define HALF_FIX15 (1 << 14) UNCOMMENT FOR BOUNCINESS OPTIMIZATION
+
 // fix15 peg_x = int2fix15(320) ;
 // fix15 peg_y = int2fix15(240) ;
 
 fix15 gravity = float2fix15(0.37) ;
 fix15 bounciness = float2fix15(0.5) ;
+// fix15 bounciness = HALF_FIX15 ; UNCOMMENT FOR BOUNCINESS OPTIMIZATION
 
 int global_ctr_chan;
 int global_data_chan;
@@ -581,6 +585,7 @@ void handlePegCollisions(Ball *ball) {
     return;
   }
 
+  // exact squared-distance collision check
   fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
 
 
@@ -609,17 +614,50 @@ void handlePegCollisions(Ball *ball) {
     ball->vy += multfix15(factor, dy);
 
     // Push ball just outside the peg 
-    float dx_float = fix2float15(dx);
-    float dy_float = fix2float15(dy);
+    // float dx_float = fix2float15(dx);
+    // float dy_float = fix2float15(dy);
 
-    float distance = sqrt(dx_float * dx_float + dy_float * dy_float);
+    // float distance = sqrt(dx_float * dx_float + dy_float * dy_float);
 
-    fix15 normal_x = float2fix15(dx_float / distance);
-    fix15 normal_y = float2fix15(dy_float / distance);
+    // fix15 normal_x = float2fix15(dx_float / distance);
+    // fix15 normal_y = float2fix15(dy_float / distance);
 
+    // fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
+
+    // ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+    // ball->y = pegs[i].y + multfix15(normal_y, push_distance);
+
+    // Push ball just outside the peg 
+     // sqrt(dx^2 + dy^2)
+        // becomes:
+        //
+        // max(|dx|, |dy|) + min(|dx|, |dy|)/4
+    fix15 abs_dx = absfix15(dx);
+    fix15 abs_dy = absfix15(dy);
+
+    fix15 max_d;
+    fix15 min_d;
+
+    if(abs_dx > abs_dy){
+      max_d = abs_dx;
+      min_d = abs_dy;
+    }else {
+      max_d = abs_dy;
+      min_d = abs_dx;
+    }
+
+    // /4 is also a shift by 2 
+    fix15 approx_distance = max_d + (min_d >> 2);
+
+    // normalize using approx distance
+    fix15 normal_x = divfix(dx, approx_distance);
+    fix15 normal_y = divfix(dy, approx_distance);
+
+    // move ball just outside peg
     fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
 
     ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+
     ball->y = pegs[i].y + multfix15(normal_y, push_distance);
 
       // Only thunk and lose energy on a NEW peg
@@ -628,6 +666,18 @@ void handlePegCollisions(Ball *ball) {
       ball->vx = multfix15(bounciness, ball->vx);
       ball->vy = multfix15(bounciness, ball->vy);
       ball->last_peg = i;
+
+      // if(bounciness == HALF_FIX15){
+      //   // 0.5x = x/2 so use a shift instead of multiplication
+      //   ball->vx >>= 1;
+      //   ball->vy >>= 1;
+      // }else{
+      //   ball->vx = multfix15(bounciness, ball->vx);
+      //   ball->vy = multfix15(bounciness, ball->vy);
+
+      // }
+
+      // ball->last_peg = i;
     }
 
   }
