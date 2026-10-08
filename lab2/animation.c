@@ -99,7 +99,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball definition
 #define MAX_BALLS 23000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 15000
+#define START_BALLS 20500
 
 typedef struct __attribute__((packed)) Ball {
   fix15 x; 
@@ -938,7 +938,7 @@ int main(){
   vreg_disable_voltage_limit();
   vreg_set_voltage(VREG_VOLTAGE_1_50);
   sleep_ms(10);                         
-  if (!set_sys_clock_khz(350000, false)) {   // false = return instead of assert
+  if (!set_sys_clock_khz(300000, false)) {   // false = return instead of assert
     set_sys_clock_khz(250000, true);         // fall back to a known-good clock
   }
   sleep_ms(1000);
@@ -948,7 +948,7 @@ int main(){
   stdio_init_all() ;
   sleep_ms(5000);
   printf("Hello World!\n");
-  printf("sys clk = %lu Hz\n", clock_get_hz(clk_sys));
+  printf("vreg = %d, clk = %lu\n", vreg_get_voltage(), clock_get_hz(clk_sys));
 
   // initialize rotary encoder
   enc_init();
