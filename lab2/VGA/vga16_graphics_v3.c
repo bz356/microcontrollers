@@ -173,6 +173,13 @@ void initVGA() {
     vsync_program_init(pio, vsync_sm, vsync_offset, VSYNC);
     rgb_program_init(pio, rgb_sm, rgb_offset, LO_GRN);
 
+    // Sharpen the RGB edges: fast slew and max drive (defaults are slow / 4 mA),
+    // which cuts the faint trail to the right of white pixels
+    for (int p = LO_GRN; p <= RED_PIN; p++) {
+        gpio_set_slew_rate(p, GPIO_SLEW_RATE_FAST);
+        gpio_set_drive_strength(p, GPIO_DRIVE_STRENGTH_12MA);
+    }
+
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     // ============================== PIO DMA Channels =================================================
     /////////////////////////////////////////////////////////////////////////////////////////////////////
