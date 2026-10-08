@@ -100,7 +100,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball count at reset: tune to the largest value that keeps the LED off
 #define START_BALLS 2000
 
-typedef struct __attribute__((packed)) Ball {
+typedef struct /*__attribute__((packed))*/ Ball {
   fix15 x; 
   fix15 y;
   fix15 vx; 
