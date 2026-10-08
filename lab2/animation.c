@@ -97,9 +97,9 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 23000
+#define MAX_BALLS 25000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 20500
+#define START_BALLS 23000
 
 typedef struct __attribute__((packed)) Ball {
   fix15 x; 
@@ -107,7 +107,7 @@ typedef struct __attribute__((packed)) Ball {
   fix15 vx; 
   fix15 vy; 
 
-  int16_t last_peg; // to keep track of when to "thunk"
+  uint8_t last_peg; // to keep track of when to "thunk"
 } Ball;
 
 Ball balls[MAX_BALLS];
@@ -250,7 +250,7 @@ fix15 peg_x = int2fix15(320) ;
 fix15 peg_y = int2fix15(240) ;
 
 fix15 gravity = float2fix15(0.37) ;
-fix15 bounciness = float2fix15(0.5) ;
+// fix15 bounciness = float2fix15(0.5) ;
 fix15 bounciness = HALF_FIX15 ; 
 
 int global_ctr_chan;
@@ -427,7 +427,7 @@ void spawnBall(Ball *ball) {
 
   // ball->vx = float2fix15(offset_milli / 1000.0f);
   ball->vy = 0; 
-  ball->last_peg = -1; // at the top, did not hit any peg yet 
+  ball->last_peg = 255; // at the top, did not hit any peg yet 
 }
 
 // Keep a fix15 value between lo and hi
@@ -568,7 +568,7 @@ void handlePegCollisions(Ball *ball) {
   fix15 dy = ball->y - pegs[i].y;
 
   // If we were touching a peg before, check whether we've moved away from it
-  if (ball->last_peg >= 0) {
+  if (ball->last_peg < 255) {
       fix15 last_dx = ball->x - pegs[ball->last_peg].x;
       fix15 last_dy = ball->y - pegs[ball->last_peg].y;
 
@@ -577,7 +577,7 @@ void handlePegCollisions(Ball *ball) {
 
       // Once clearly outside the previous peg, allow another thunk later
       if (absfix15(last_dx) >= release_distance || absfix15(last_dy) >= release_distance) {
-          ball->last_peg = -1;
+          ball->last_peg = 255;
       }
   }
 
