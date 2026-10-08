@@ -69,11 +69,11 @@ DrawPixel is faster
 // VGA timing constants
 #define H_ACTIVE   655    // (active + frontporch - 1) - one cycle delay for mov
 #define V_ACTIVE   479    // (active - 1)
-#define RGB_ACTIVE 319    // (horizontal active)/2 - 1
+#define RGB_ACTIVE 639    // pixels per line - 1 (one pixel per PIO loop)
 // #define RGB_ACTIVE 639 // change to this if 1 pixel/byte
 
 // Length of the pixel array, and number of DMA transfers
-#define VGA_BUFFER_COUNT 153600 // Total pixels/2 (since we have 2 pixels per byte)
+#define VGA_BUFFER_COUNT 38400 // eight pixels per byte, 640 x 480
 
 // ===============================
 // !!!=========================!!!
@@ -91,12 +91,12 @@ DrawPixel is faster
 // Pixel color array that is DMAed to the PIO machines and
 // a pointer to the ADDRESS of this color array.
 // Note that this array is automatically initialized to all 0's (black)
-unsigned char vga_buffer_0[VGA_BUFFER_COUNT];
+unsigned char vga_buffer_0[VGA_BUFFER_COUNT] __attribute__((aligned(4)));
 char * pointer_vga_buffer_0 = &vga_buffer_0[0] ;
 //
 // only define second buffer if necessary
 #ifndef DOUBLE_BUFFER_NONE
-  unsigned char vga_buffer_1[VGA_BUFFER_COUNT];
+  unsigned char vga_buffer_1[VGA_BUFFER_COUNT] __attribute__((aligned(4)));
   char * pointer_vga_buffer_1 = &vga_buffer_1[0] ;
 #endif
 //
@@ -251,7 +251,7 @@ void initVGA() {
 
     // data_chan (sends color data to PIO VGA machine)
     dma_channel_config c0 = dma_channel_get_default_config(rgb_data_chan);  // default configs
-    channel_config_set_transfer_data_size(&c0, DMA_SIZE_8);              // 8-bit txfers
+    channel_config_set_transfer_data_size(&c0, DMA_SIZE_32);              // 32-bit txfers
     channel_config_set_read_increment(&c0, true);                        // yes read incrementing
     channel_config_set_write_increment(&c0, false);                      // no write incrementing
     channel_config_set_dreq(&c0, DREQ_PIO0_TX2) ;                        // DREQ_PIO0_TX2 pacing (FIFO)
@@ -259,11 +259,11 @@ void initVGA() {
     channel_config_set_high_priority (&c0, rgb_high_priority) ;
 
     dma_channel_configure(
-        rgb_data_chan,                 // Channel to be configured
+        rgb_data_chan,              // Channel to be configured
         &c0,                        // The configuration we just created
         &pio->txf[rgb_sm],          // write address (RGB PIO TX FIFO)
-        &vga_buffer_0,            // The initial read address (pixel color array)
-        VGA_BUFFER_COUNT,           // Number of transfers; in this case each is 1 byte.
+        &vga_buffer_0,              // The initial read address (pixel color array)
+        VGA_BUFFER_COUNT / 4,       // Number of transfers; each is 4 bytes
         false                       // Don't start immediately.
     );
 
@@ -357,20 +357,11 @@ void drawPixel(short x, short y, char color) {
     // Range checks (640x480 display)
     if((x > 639) | (x < 0) | (y > 479) | (y < 0) ) return;
 
-    // Which pixel is it?
-    // shift by one to get the byte (two pixels/byte)
-    //int pixel = (640 * y + x) >> 1;
-    char * draw_loc = (current_draw_buffer + ((640 * y + x) >> 1)) ;
-    // Is this pixel stored in the first 4 bits
-    // of the vga data array index, or the second
-    // 4 bits? Check, then mask.
-    // draws to the current_draw_buffer
-    if (x & 1) {
-        *(draw_loc) = (*(draw_loc) & TOPMASK) | (color << 4) ;
-    }
-    else {
-        *(draw_loc) = (*(draw_loc) & BOTTOMMASK) | (color) ;
-    }
+    // 8 pixels per byte, pixel x is bit (x & 7)
+    unsigned char * draw_loc = (unsigned char *)current_draw_buffer + 80 * y + (x >> 3) ;
+    unsigned char bit = 1 << (x & 7) ;
+    if (color) *draw_loc |= bit ;     // any nonzero color is white
+    else       *draw_loc &= ~bit ;
 }
 
 // Check status of neighbors
@@ -408,32 +399,27 @@ void drawVLine(short x, short y, short h, char color) {
 // note that this function draws using drawPiexl AND
 // directly hitting the buffer memory for speed
 void drawHLine(int x, int y, int w, char color) {
-  // range checks
-  if((x >= _width) || (y >= _height)) return;
-  if((x + w - 1) >= _width)  w = _width  - x - 1;
-  if(w<1) return ;
-  //
-  if(w == 1){
-    drawPixel(x,y,color);
-    return ;
+  // range checks (also clips the left edge, which the old version didn't)
+  if((y < 0) || (y >= _height) || (x >= _width)) return;
+  if(x < 0) { w += x; x = 0; }
+  if(x + w > _width) w = _width - x;
+  if(w < 1) return;
+
+  unsigned char * row = (unsigned char *)current_draw_buffer + 80 * y;
+  unsigned char fill = color ? 0xFF : 0x00;
+  int last = x + w - 1;                                  // last pixel drawn
+  int b0 = x >> 3, b1 = last >> 3;                       // first and last byte
+  unsigned char m0 = (unsigned char)(0xFF << (x & 7));   // bits from x up
+  unsigned char m1 = (unsigned char)(0xFF >> (7 - (last & 7))); // bits up to last
+
+  if(b0 == b1) {                       // whole line inside one byte
+    unsigned char m = m0 & m1;
+    row[b0] = (row[b0] & ~m) | (fill & m);
+    return;
   }
-  //
-  short both_color = color | (color<<4) ;
-  // loner pixel at x -- align left with next byte boundary
-  if((x & 1)) {
-    drawPixel(x,y,color);
-    x++ ;
-    w-- ;
-  }
-  // draw loner pixel at end and adjust width
-  if((w & 1)){
-    drawPixel(x+w-1, y, color);
-    w-- ;
-  }
-  // draw rest of line
-  int len = (w>>1)  ;
-  if (len>0  )  //&& len+x < 640 && y<480
-    memset(current_draw_buffer+(320*y+(x>>1)), both_color, len) ;
+  row[b0] = (row[b0] & ~m0) | (fill & m0);              // partial first byte
+  if(b1 - b0 > 1) memset(row + b0 + 1, fill, b1 - b0 - 1); // full bytes
+  row[b1] = (row[b1] & ~m1) | (fill & m1);              // partial last byte
 }
 
 // general line drawing
@@ -1039,41 +1025,45 @@ inline void writeStringBold(char* str){
     textbgcolor = temp_bg ;
 }
 
+// Write n pixels (n <= 16) starting at (x, y). Bit k of 'bits' is pixel x+k:
+// 1 = color, 0 = bgcolor. Works at any x, not just byte boundaries.
+static void writeBits(int x, int y, unsigned int bits, int n, char color, char bgcolor) {
+  unsigned int fg = color   ? 0xFFFF : 0 ;
+  unsigned int bg = bgcolor ? 0xFFFF : 0 ;
+  unsigned int shift = x & 7 ;
+  unsigned int mask = ((1u << n) - 1) << shift ;
+  unsigned int val  = (((bits & fg) | (~bits & bg)) << shift) & mask ;
+  unsigned char * p = (unsigned char *)current_draw_buffer + 80 * y + (x >> 3) ;
+  for( ; mask ; p++, mask >>= 8, val >>= 8) {
+    *p = (*p & ~(unsigned char)mask) | (unsigned char)val ;
+  }
+}
+
 // ===============================================
 //Re-entrant text -- >>USE THESE!<<
 //
 // //GLCD font Adafruit and Hunter
 // returns num chars drawn
 int drawTextGLCD(short x, short y, char * str, char color, char bgcolor){
-  char col[5];
   int char_count = 0 ;
-  // get string start
-  char * draw_loc = (current_draw_buffer + ((640 * y + x) >> 1)) ;
   // error check
   if(x<0 | y<0 | y>470 ) return 0;
-  // set up the possible values for any byte
-  char pix_value[4] = 
-    {(bgcolor<<4 | bgcolor), (color<<4 | bgcolor), (bgcolor<<4 | color), (color<<4 | color)};
-  // 
   while (*str){
     if((x+6 > 639)) return char_count ;
-    char c = *str++ ;   
-    char_count++ ; 
-    for (int i=0; i<5; i++ ) { 
-      col[i] = pgm_read_byte(font+(c*5)+i) ;
+    char c = *str++ ;
+    char_count++ ;
+    for (int i=0; i<8; i++ ) {
+      // font stores 5 columns; bit i of each column is row i.
+      // Collect row i into bits 0-4 (left to right); bit 5 stays 0 = gap column.
+      unsigned int bits = 0 ;
+      for (int k=0; k<5; k++) {
+        bits |= ((pgm_read_byte(font+(c*5)+k) >> i) & 1) << k ;
+      }
+      writeBits(x, y+i, bits, 6, color, bgcolor) ;
     }
-    for (int i=0; i<8; i++ ) {   
-      // each two pixels is one byte, so write 3 bytes
-      // using the value of 'col' to index into the pixel table
-      // then do a lot of bit shffling to transpose the character
-        *(draw_loc+i*320) =   pix_value[(((col[0]>>i)&0x01)<<1) | (((col[1]>>i)&0x01))] ;
-        *(draw_loc+i*320+1) = pix_value[(((col[2]>>i)&0x01)<<1) | (((col[3]>>i)&0x01))] ;
-        *(draw_loc+i*320+2) = pix_value[(((col[4]>>i)&0x01)<<1) ] ;   
-    }
-    draw_loc += 3 ;
     x += 6 ;
-  }     
-  return char_count ;  
+  }
+  return char_count ;
 }
 
 // ASCII from Designed by: David Perez de la Cruz,and Ed Lau
@@ -1276,16 +1266,16 @@ void drawBoldTextGLCD(short x, short y, char * str, char textcolor, char textbgc
 // the vga display boundaries (0,0) to (640,480)
 void clearRect(short x1, short y1, short x2, short y2, short c) {
   for(int i=y1; i<y2; i++){
-    memset(current_draw_buffer+320*i+(x1>>1), c | (c<<4), (x2-x1)>>1) ;
+    drawHLine(x1, i, x2 - x1, c) ;   // handles any x alignment now
   };
 }
 //
 void clearLowFrame(short top, short c) {
-    memset((current_draw_buffer+320*top), c | (c<<4), (VGA_BUFFER_COUNT-320*top) );
+    memset((current_draw_buffer+80*top), c ? 0xFF : 0x00, (VGA_BUFFER_COUNT-80*top) );
 }
 // region from y1 to y2 with y1 < y2
 void clearRegion(short y1, short y2, short c) {
-  memset((current_draw_buffer+320*y1), c | (c<<4), (320*(y2-y1)) );
+  memset((current_draw_buffer+80*y1), c ? 0xFF : 0x00, (80*(y2-y1)) );
 }
 
 // ======================================
@@ -1330,19 +1320,8 @@ int get_buffer_type(void){
 // get the color of a pixel
 // but remember there are two buffers!
 short readPixel(short x, short y) {
-  // Which pixel is it?
-  int pixel = ((640 * y) + x)>>1 ;
-  short color ;
-  // Is this pixel stored in the first 4 bits
-  // of the vga data array index, or the second
-  // 4 bits? Check, then mask.
-  if (x & 1) {
-      color = *(current_draw_buffer+pixel) >> 4 ;
-  }
-  else {
-      color = *(current_draw_buffer+pixel)& 0xf  ;
-  }
-  return color ;
+  unsigned char * loc = (unsigned char *)current_draw_buffer + 80 * y + (x >> 3) ;
+  return (*loc >> (x & 7)) & 1 ;
 }
   
 ///////////////////////////////////////////////
