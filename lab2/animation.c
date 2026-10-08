@@ -935,17 +935,18 @@ void core1_main(){
 int main(){
   // set_sys_clock_khz(150000, true) ;
   
-  // 1. Raise core voltage first (default is 1.10 V)
-  vreg_set_voltage(VREG_VOLTAGE_1_20);
-  sleep_ms(10);                         // let the regulator settle
-  // 2. Then raise the clock (kHz). true = assert if unreachable
-  set_sys_clock_khz(250000, true);
+  vreg_disable_voltage_limit();
+  vreg_set_voltage(VREG_VOLTAGE_1_50);
+  sleep_ms(10);                         
+  if (!set_sys_clock_khz(350000, false)) {   // false = return instead of assert
+    set_sys_clock_khz(250000, true);         // fall back to a known-good clock
+  }
   sleep_ms(1000);
   
 
   // initialize stio
   stdio_init_all() ;
-  sleep_ms(1000);
+  sleep_ms(5000);
   printf("Hello World!\n");
   printf("sys clk = %lu Hz\n", clock_get_hz(clk_sys));
 
