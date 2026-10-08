@@ -7,8 +7,8 @@
 .program rgb
 ; define the pixel hold times which depend on clock freq
 ; pixelhold should be 2 for 150 MHz in black and white modification
-.define pixelhold 2
-.define PUBLIC vid_freq 150
+.define pixelhold 6
+.define PUBLIC vid_freq 250
 
 pull block 					; Pull from FIFO to OSR (only once)
 out isr, 32                 ; move pull block value to input shift register
@@ -46,7 +46,7 @@ static inline void rgb_program_init(PIO pio, uint sm, uint offset, uint pin) {
     sm_config_set_out_shift(&c, true, true, 32);
 
     // Set clock division (Commented out, this one runs at full speed)
-    // sm_config_set_clkdiv(&c, 5) ;
+    //sm_config_set_clkdiv(&c, 2) ;
 
     // longer FIFO to avoid bursty data
     sm_config_set_fifo_join (&c, PIO_FIFO_JOIN_TX) ;

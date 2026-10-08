@@ -99,7 +99,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball definition
 #define MAX_BALLS 23000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 10000
+#define START_BALLS 15000
 
 typedef struct __attribute__((packed)) Ball {
   fix15 x; 
@@ -468,7 +468,7 @@ void handleInput(void) {
 
   switch (mode) {
     case MODE_BALLS:
-      changeBallCount(clicks);
+      changeBallCount(clicks*100);
       break;
     case MODE_BOUNCE:
       bounciness = clampFix(bounciness + clicks * float2fix15(0.05), 0, int2fix15(2));
@@ -939,14 +939,15 @@ int main(){
   vreg_set_voltage(VREG_VOLTAGE_1_20);
   sleep_ms(10);                         // let the regulator settle
   // 2. Then raise the clock (kHz). true = assert if unreachable
-  set_sys_clock_khz(150000, true);
+  set_sys_clock_khz(250000, true);
   sleep_ms(1000);
-  printf("sys clk = %lu Hz\n", clock_get_hz(clk_sys));
+  
 
   // initialize stio
   stdio_init_all() ;
+  sleep_ms(1000);
   printf("Hello World!\n");
-  
+  printf("sys clk = %lu Hz\n", clock_get_hz(clk_sys));
 
   // initialize rotary encoder
   enc_init();
