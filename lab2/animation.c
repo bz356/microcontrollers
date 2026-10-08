@@ -490,10 +490,13 @@ void drawBall(Ball *ball) {
   short x = (short)fix2int15(ball->x);
   short y = (short)fix2int15(ball->y);
 
-  drawPixel(x + BALL_RADIUS, y, BLUE); // right
-  drawPixel(x - BALL_RADIUS, y, BLUE); // left
-  drawPixel(x, y + BALL_RADIUS, BLUE); // down
-  drawPixel(x, y - BALL_RADIUS, BLUE); // up
+  // drawPixel(x + BALL_RADIUS, y, BLUE); // right
+  // drawPixel(x - BALL_RADIUS, y, BLUE); // left
+  // drawPixel(x, y + BALL_RADIUS, BLUE); // down
+  // drawPixel(x, y - BALL_RADIUS, BLUE); // up
+
+  drawHLine(x - 1, y - 1, 2, BLUE);
+  drawHLine(x - 1, y,     2, BLUE);
 
 
 }
