@@ -581,13 +581,43 @@ void handlePegCollisions(Ball *ball) {
       }
   }
 
+  fix15 abs_dx = absfix15(dx);
+  fix15 abs_dy = absfix15(dy);
+
   // cheap bounding check 
-  if(absfix15(dx) >= COLLISION_DISTANCE || absfix15(dy) >= COLLISION_DISTANCE){
+  if(abs_dx >= COLLISION_DISTANCE || abs_dy >= COLLISION_DISTANCE){
     return;
   }
 
   // exact squared-distance collision check
-  fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+  // fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+
+    // ALPHA-MAX + BETA-MIN
+    //
+    // lecture optimization:
+    //
+    // sqrt(dx^2 + dy^2)
+    //
+    // becomes:
+    //
+    // max(|dx|, |dy|) + min(|dx|, |dy|)/4
+    //
+    // alpha = 1
+    // beta  = 1/4
+
+    fix15 max_d;
+    fix15 min_d;
+
+    if(abs_dx > abs_dy){
+      max_d = abs_dx;
+      min_d = abs_dy;
+    }else{
+      max_d = abs_dy;
+      min_d = abs_dx;
+    }
+
+    // /4 is also a shift by 2 
+    fix15 approx_distance = max_d + (min_d >> 2);
 
 
 
@@ -595,13 +625,19 @@ void handlePegCollisions(Ball *ball) {
   // float dy_float = fix2float15(dy) ;
 
   // float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
-
-  if ((dist_squared >= COLLISION_SQUARED) || dist_squared == 0) {
+  
+  // use approx distance for actual collision test
+  if ((approx_distance >= COLLISION_DISTANCE) || approx_distance == 0) {
     //ball->last_peg = -1;
     return;
   }
 
-  // WANNA DO UNNORMALIZED VECTOR CALCULATION HERE INSETAD 
+  // WANNA DO UNNORMALIZED VECTOR CALCULATION HERE INSETAD
+  fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+
+  if (dist_squared == 0) {
+      return;
+  }
   fix15 dot = multfix15(ball->vx, dx) + multfix15(ball->vy, dy);
 
   // only reflect if ball is moving INTO the peg 
@@ -629,30 +665,27 @@ void handlePegCollisions(Ball *ball) {
     // ball->y = pegs[i].y + multfix15(normal_y, push_distance);
 
     // Push ball just outside the peg 
-     // sqrt(dx^2 + dy^2)
-        // becomes:
-        //
-        // max(|dx|, |dy|) + min(|dx|, |dy|)/4
-    fix15 abs_dx = absfix15(dx);
-    fix15 abs_dy = absfix15(dy);
+  
+    
+    // normalize using approx distance
+    // fix15 normal_x = divfix(dx, approx_distance);
+    // fix15 normal_y = divfix(dy, approx_distance);
 
-    fix15 max_d;
-    fix15 min_d;
+    // normalize without using divfix
 
-    if(abs_dx > abs_dy){
-      max_d = abs_dx;
-      min_d = abs_dy;
-    }else {
-      max_d = abs_dy;
-      min_d = abs_dx;
+    // first scale dx, dy, and distance down equally so that 
+    // (scaled_dx << 15) fits safely in a 32-bit integer
+    int32_t scaled_dx = ((int32_t)dx >> 4);
+    int32_t scaled_dy = ((int32_t)dy >> 4);
+
+    int32_t scaled_distance = ((int32_t)approx_distance >> 4);
+
+    if (scaled_distance == 0) {
+      return;
     }
 
-    // /4 is also a shift by 2 
-    fix15 approx_distance = max_d + (min_d >> 2);
-
-    // normalize using approx distance
-    fix15 normal_x = divfix(dx, approx_distance);
-    fix15 normal_y = divfix(dy, approx_distance);
+    fix15 normal_x = (fix15)((scaled_dx * (1 << 15)) / scaled_distance);
+    fix15 normal_y = (fix15)((scaled_dy * (1 << 15)) / scaled_distance);
 
     // move ball just outside peg
     fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
