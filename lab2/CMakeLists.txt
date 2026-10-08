@@ -63,4 +63,4 @@ pico_enable_stdio_uart(VGA_Animation_Demo 0)
 pico_add_extra_outputs(VGA_Animation_Demo)
 
 # pico_set_binary_type(VGA_Animation_Demo copy_to_ram)
-target_compile_definitions(VGA_Animation_Demo PRIVATE PICO_FLASH_SPI_CLKDIV=6)
+target_compile_definitions(VGA_Animation_Demo PRIVATE PICO_FLASH_SPI_CLKDIV=8)

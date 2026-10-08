@@ -97,11 +97,11 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 25000
+#define MAX_BALLS 47000
 // Ball count at reset: tune to the largest value that keeps the LED off
 #define START_BALLS 25000
 
-typedef struct __attribute__((packed)) Ball {
+typedef struct  Ball {
   fix15 x; 
   fix15 y;
   fix15 vx; 
@@ -112,7 +112,43 @@ typedef struct __attribute__((packed)) Ball {
 
 uint8_t last_pegs[MAX_BALLS];
 
-Ball balls[MAX_BALLS];
+// Compact storage: 9 bytes per ball
+static uint16_t ball_x[MAX_BALLS];    // Q10.6
+static int16_t  ball_y[MAX_BALLS];    // Q9.6
+static int16_t  ball_vx[MAX_BALLS];   // Q7.8
+static int16_t  ball_vy[MAX_BALLS];   // Q7.8
+// static uint8_t  ball_peg[MAX_BALLS];
+
+// Shifts between fix15 (15 frac bits) and storage formats
+#define POS_SHIFT 9   // 15 - 6
+#define VEL_SHIFT 7   // 15 - 8
+
+// Round instead of truncate, so positions don't drift left over time
+#define ROUND_SHIFT(v, s) (((v) + (1 << ((s) - 1))) >> (s))
+
+static inline int16_t clamp16(int32_t v) {
+  // if (v >  32767) return  32767;
+  // if (v < -32768) return -32768;
+  return (int16_t)v;
+}
+
+static inline void loadBall(int i, Ball *b) {
+  b->x  = (fix15)ball_x[i] << POS_SHIFT;
+  b->y  = (fix15)ball_y[i]  * (1 << POS_SHIFT);   // multiply, since shifting
+  b->vx = (fix15)ball_vx[i] * (1 << VEL_SHIFT);   // negatives left is undefined in C
+  b->vy = (fix15)ball_vy[i] * (1 << VEL_SHIFT);
+  // b->last_peg = ball_peg[i];
+}
+
+static inline void storeBall(int i, const Ball *b) {
+  ball_x[i]   = (uint16_t)ROUND_SHIFT(b->x, POS_SHIFT);
+  ball_y[i]   = clamp16(ROUND_SHIFT(b->y,  POS_SHIFT));
+  ball_vx[i]  = clamp16(ROUND_SHIFT(b->vx, VEL_SHIFT));
+  ball_vy[i]  = clamp16(ROUND_SHIFT(b->vy, VEL_SHIFT));
+  // ball_peg[i] = b->last_peg;
+}
+
+// Ball balls[MAX_BALLS];
 int current_ball_count = START_BALLS;
 
 #define NUM_ROWS 16
@@ -447,7 +483,10 @@ void changeBallCount(int clicks) {
   if (n < 0) n = 0;
   if (n > MAX_BALLS) n = MAX_BALLS;
   for (int i = current_ball_count; i < n; i++) {
-    spawnBall(&balls[i], i);
+    // spawnBall(&balls[i], i);
+    Ball b;
+    spawnBall(&b, i);
+    storeBall(i, &b);
   }
   current_ball_count = n;
 }
@@ -755,6 +794,7 @@ void updateBallPos(Ball *ball, int i){
     int core = get_core_num();                       // 0 or 1
     histogram[core][bucketForX(fix2int15(ball->x))]++;
     ball_count[core]++;
+    // spawnBall(ball, i);
     spawnBall(ball, i);
     return;
   }
@@ -884,7 +924,10 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 
     // Start every ball at the top
     for (int i = 0; i < MAX_BALLS; i++) {
-      spawnBall(&balls[i], i);
+      // spawnBall(&balls[i], i);
+      Ball b;
+      spawnBall(&b, i);
+      storeBall(i, &b);
     }
 
     while(1) {
@@ -919,8 +962,13 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       drawPegs();
 
       for (int i = 0; i < current_ball_count / 2; i++) {
-        updateBallPos(&balls[i], i);
-        drawBall(&balls[i]);
+        // updateBallPos(&balls[i], i);
+        // drawBall(&balls[i]);
+        Ball b;
+        loadBall(i, &b);
+        updateBallPos(&b, i);
+        storeBall(i, &b);
+        drawBall(&b);
       }
 
       PT_SEM_SDK_WAIT(pt, &done_semaphore);   // wait for core 1
@@ -946,8 +994,13 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
     while(1) {
       PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
       for (int i = current_ball_count / 2; i < current_ball_count; i++) {
-        updateBallPos(&balls[i], i);
-        drawBall(&balls[i]);
+        // updateBallPos(&balls[i], i);
+        // drawBall(&balls[i]);
+        Ball b;
+        loadBall(i, &b);
+        updateBallPos(&b, i);
+        storeBall(i, &b);
+        drawBall(&b);
       }
       sem_release(&done_semaphore);
     }
