@@ -773,6 +773,162 @@ void handlePegCollisions(Ball *ball, int j) {
 
 }
 
+/* CLAUDE REVIEW THIS*/
+// ==================================================
+// Fast per-ball update: load, step, store and draw in one pass
+// ==================================================
+
+#define RELEASE_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS + 2)
+
+// Per-core xorshift RNG: cheaper than rand(), and no shared state between cores
+static uint32_t rng_state[2] = { 0x12345678u, 0x9e3779b9u };
+
+static inline uint32_t fastRand(int core) {
+  uint32_t s = rng_state[core];
+  s ^= s << 13;
+  s ^= s >> 17;
+  s ^= s << 5;
+  rng_state[core] = s;
+  return s;
+}
+
+// Slow path: only runs when the ball is inside the bounding box of peg i.
+// Same math as the second half of handlePegCollisions.
+static void resolvePegCollision(Ball *ball, int i, int j, fix15 dx, fix15 dy) {
+  fix15 abs_dx = absfix15(dx);
+  fix15 abs_dy = absfix15(dy);
+
+  // alpha max + beta min (alpha = 1, beta = 1/4)
+  fix15 max_d = (abs_dx > abs_dy) ? abs_dx : abs_dy;
+  fix15 min_d = (abs_dx > abs_dy) ? abs_dy : abs_dx;
+  fix15 approx_distance = max_d + (min_d >> 2);
+
+  if (approx_distance >= COLLISION_DISTANCE || approx_distance == 0) return;
+
+  fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+  if (dist_squared == 0) return;
+
+  fix15 dot = multfix15(ball->vx, dx) + multfix15(ball->vy, dy);
+  if (dot >= 0) return;   // moving away from the peg
+
+  // v' = v - 2(v.d)/(d.d) * d
+  fix15 factor = divfix(-2 * dot, dist_squared);
+  ball->vx += multfix15(factor, dx);
+  ball->vy += multfix15(factor, dy);
+
+  // Normalize with a scaled-down 32-bit divide
+  int32_t scaled_dx = dx >> 4;
+  int32_t scaled_dy = dy >> 4;
+  int32_t scaled_distance = approx_distance >> 4;
+  if (scaled_distance == 0) return;
+
+  fix15 normal_x = (fix15)((scaled_dx * (1 << 15)) / scaled_distance);
+  fix15 normal_y = (fix15)((scaled_dy * (1 << 15)) / scaled_distance);
+
+  // Push ball just outside the peg
+  fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
+  ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+  ball->y = pegs[i].y + multfix15(normal_y, push_distance);
+
+  // Only thunk and lose energy on a NEW peg
+  if (i != last_pegs[j]) {
+    thunk();
+    if (bounciness == HALF_FIX15) {
+      ball->vx >>= 1;
+      ball->vy >>= 1;
+    } else {
+      ball->vx = multfix15(bounciness, ball->vx);
+      ball->vy = multfix15(bounciness, ball->vy);
+    }
+    last_pegs[j] = i;
+  }
+}
+
+// Update and draw balls [start, end) on the calling core
+static void stepBalls(int start, int end) {
+  const int core = get_core_num();
+  const fix15 g = gravity;            // read once per frame, not once per ball
+  int *hist = histogram[core];
+  uint32_t fallen = 0;
+
+  for (int i = start; i < end; i++) {
+    // Unpack straight into registers and apply velocity
+    fix15 vx = (fix15)ball_vx[i] * (1 << VEL_SHIFT);
+    fix15 vy = (fix15)ball_vy[i] * (1 << VEL_SHIFT);
+    fix15 x  = ((fix15)ball_x[i] << POS_SHIFT) + vx;
+    fix15 y  = (fix15)ball_y[i] * (1 << POS_SHIFT) + vy;
+    bool respawn = false;
+
+    if (x < int2fix15(BALL_RADIUS) || x > int2fix15(640 - BALL_RADIUS)) {
+      respawn = true;   // off the side
+    } else {
+      // Nearest peg (same lookup as before)
+      int by  = fix2int15(y);
+      int row = (by - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
+
+      if (row >= 0 && row < NUM_ROWS) {
+        int bx = fix2int15(x);
+        int start_x = 320 - (row * PEG_SPACE) / 2;
+        int col = (bx - start_x + PEG_SPACE / 2) / PEG_SPACE;
+        if (col < 0)   col = 0;
+        if (col > row) col = row;
+        int p = row * (row + 1) / 2 + col;
+
+        // Release the previous peg once clearly away from it
+        uint8_t lp = last_pegs[i];
+        if (lp < 255) {
+          fix15 ldx = x - pegs[lp].x;
+          fix15 ldy = y - pegs[lp].y;
+          if (absfix15(ldx) >= RELEASE_DISTANCE || absfix15(ldy) >= RELEASE_DISTANCE) {
+            last_pegs[i] = 255;
+          }
+        }
+
+        // Cheap bounding check; most balls stop here
+        fix15 dx = x - pegs[p].x;
+        fix15 dy = y - pegs[p].y;
+        if (absfix15(dx) < COLLISION_DISTANCE && absfix15(dy) < COLLISION_DISTANCE) {
+          Ball b = { x, y, vx, vy };
+          resolvePegCollision(&b, p, i, dx, dy);
+          x = b.x;  y = b.y;  vx = b.vx;  vy = b.vy;
+        }
+      }
+
+      if (y >= int2fix15(HIST_TOP)) {
+        hist[bucketForX(fix2int15(x))]++;
+        fallen++;
+        respawn = true;
+      } else {
+        vy += g;
+      }
+    }
+
+    if (respawn) {
+      x  = int2fix15(320);
+      y  = 0;
+      vx = (fix15)(fastRand(core) & 0xffff) - int2fix15(1);
+      vy = 0;
+      last_pegs[i] = 255;
+    }
+
+    // Pack back into compact storage
+    ball_x[i]  = (uint16_t)ROUND_SHIFT(x,  POS_SHIFT);
+    ball_y[i]  = (int16_t) ROUND_SHIFT(y,  POS_SHIFT);
+    ball_vx[i] = (int16_t) ROUND_SHIFT(vx, VEL_SHIFT);
+    ball_vy[i] = (int16_t) ROUND_SHIFT(vy, VEL_SHIFT);
+
+    // Draw
+    short px = (short)fix2int15(x);
+    short py = (short)fix2int15(y);
+    drawHLine(px - 1, py - 1, 2, BLUE);
+    drawHLine(px - 1, py,     2, BLUE);
+  }
+
+  ball_count[core] += fallen;   // one shared-memory write per frame instead of per ball
+}
+
+/*CLAUDE END*/
+
 // used to be wallsAndEdges
 void updateBallPos(Ball *ball, int i){
   ball->x += ball->vx;
@@ -961,15 +1117,18 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       // Draw the pegs
       drawPegs();
 
-      for (int i = 0; i < current_ball_count / 2; i++) {
-        // updateBallPos(&balls[i], i);
-        // drawBall(&balls[i]);
-        Ball b;
-        loadBall(i, &b);
-        updateBallPos(&b, i);
-        storeBall(i, &b);
-        drawBall(&b);
-      }
+      // for (int i = 0; i < current_ball_count / 2; i++) {
+      //   updateBallPos(&balls[i], i);
+      //   drawBall(&balls[i]);
+      //   Ball b;
+      //   loadBall(i, &b);
+      //   updateBallPos(&b, i);
+      //   storeBall(i, &b);
+      //   drawBall(&b);
+
+        
+      // }
+      stepBalls(0, current_ball_count / 2);
 
       PT_SEM_SDK_WAIT(pt, &done_semaphore);   // wait for core 1
 
@@ -993,15 +1152,18 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
 
     while(1) {
       PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
-      for (int i = current_ball_count / 2; i < current_ball_count; i++) {
-        // updateBallPos(&balls[i], i);
-        // drawBall(&balls[i]);
-        Ball b;
-        loadBall(i, &b);
-        updateBallPos(&b, i);
-        storeBall(i, &b);
-        drawBall(&b);
-      }
+      // for (int i = current_ball_count / 2; i < current_ball_count; i++) {
+      //   updateBallPos(&balls[i], i);
+      //   drawBall(&balls[i]);
+      //   Ball b;
+      //   loadBall(i, &b);
+      //   updateBallPos(&b, i);
+      //   storeBall(i, &b);
+      //   drawBall(&b);
+
+        
+      // }
+      stepBalls(current_ball_count / 2, current_ball_count);
       sem_release(&done_semaphore);
     }
   PT_END(pt);
