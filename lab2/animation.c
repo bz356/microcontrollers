@@ -48,6 +48,7 @@
 // Include hardware libraries
 #include "hardware/pio.h"
 #include "hardware/dma.h"
+#include "hardware/vreg.h"
 #include "hardware/clocks.h"
 #include "hardware/pll.h"
 #include "hardware/spi.h"
@@ -932,7 +933,16 @@ void core1_main(){
 // ========================================
 // USE ONLY C-sdk library
 int main(){
-  set_sys_clock_khz(150000, true) ;
+  // set_sys_clock_khz(150000, true) ;
+  
+  // 1. Raise core voltage first (default is 1.10 V)
+  vreg_set_voltage(VREG_VOLTAGE_1_20);
+  sleep_ms(10);                         // let the regulator settle
+  // 2. Then raise the clock (kHz). true = assert if unreachable
+  set_sys_clock_khz(150000, true);
+  sleep_ms(1000);
+  printf("sys clk = %lu Hz\n", clock_get_hz(clk_sys));
+
   // initialize stio
   stdio_init_all() ;
   printf("Hello World!\n");
@@ -970,7 +980,7 @@ int main(){
   pt_add_thread(protothread_serial);
   pt_add_thread(protothread_anim);
   // pt_add_thread(protothread_anim1);  
-
+  
   // start scheduler
   pt_schedule_start ;
 } 
