@@ -94,9 +94,9 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 47000
+#define MAX_BALLS 55000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 47000
+#define START_BALLS 55000
 
 typedef struct  Ball {
   fix15 x; 
@@ -107,12 +107,16 @@ typedef struct  Ball {
   // uint8_t last_peg; // to keep track of when to "thunk"
 } Ball;
 
-uint8_t last_pegs[MAX_BALLS];
-
-// Compact storage: 9 bytes per ball (8 here + 1 in last_pegs).
-// Two 16-bit fields per word so one ball is just two 32-bit loads/stores:
-//   pos = x (low half, Q10.6 unsigned) | y  (high half, Q9.6 signed)
-//   vel = vx (low half, Q7.8 signed)  | vy (high half, Q7.8 signed)
+// Compact storage: 8 bytes per ball (55,000 balls = 440 KB).
+//   pos = x (bits 0-15, Q10.6 unsigned) | y (bits 16-31, Q9.6 signed)
+//   vel = vx (bits 0-14, Q6.8 signed) | vy (bits 15-29, Q6.8 signed) | held (bits 30-31)
+// Velocities saturate at +/-64 px/frame (a full-height fall at max gravity is ~38).
+//
+// "held" replaces the old per-ball last_peg byte. A held peg is always within
+// 11 px of the ball (it's released as soon as the ball gets farther), so it must
+// sit in one of the two rows bracketing the ball, and only one peg per row can be
+// that close. 2 bits are enough: 0 = none, 1 = upper row, 2 = lower row, with the
+// column recovered from x. See heldRowBase().
 typedef struct PackedBall {
   uint32_t pos;
   uint32_t vel;
@@ -123,18 +127,29 @@ static PackedBall packed_balls[MAX_BALLS] __attribute__((aligned(8)));
 // Shifts between fix15 (15 frac bits) and storage formats
 #define POS_SHIFT 9   // 15 - 6
 #define VEL_SHIFT 7   // 15 - 8
+#define VEL_MAX   16383   // 15-bit signed limit, in Q6.8 units
 
 // Round instead of truncate, so positions don't drift left over time
 #define ROUND_SHIFT(v, s) (((v) + (1 << ((s) - 1))) >> (s))
 
-// Unpack: shift each half to the top of the word, then arithmetic-shift
+// Unpack: move each field to the top of the word, then arithmetic-shift
 // down so it lands already scaled to fix15 (no separate multiply)
 #define UNPACK_X(p)  ((fix15)(((uint32_t)(p) << 16) >> (16 - POS_SHIFT)))
 #define UNPACK_Y(p)  ((fix15)((int32_t)((p) & 0xFFFF0000u) >> (16 - POS_SHIFT)))
-#define UNPACK_VX(v) ((fix15)((int32_t)((uint32_t)(v) << 16) >> (16 - VEL_SHIFT)))
-#define UNPACK_VY(v) ((fix15)((int32_t)((v) & 0xFFFF0000u) >> (16 - VEL_SHIFT)))
+#define UNPACK_VX(v) ((fix15)((int32_t)((uint32_t)(v) << 17) >> (17 - VEL_SHIFT)))
+#define UNPACK_VY(v) ((fix15)((int32_t)(((uint32_t)(v) << 2) & 0xFFFE0000u) >> (17 - VEL_SHIFT)))
+#define UNPACK_HELD(v) ((uint32_t)(v) >> 30)
 
-#define PACK(lo, hi) (((uint32_t)(lo) & 0xFFFFu) | ((uint32_t)(hi) << 16))
+// Whole-pixel position as stored (what the held-peg code is relative to)
+#define STORED_X_PX(p) ((int)(((p) & 0xFFFFu) >> 6))
+#define STORED_Y_PX(p) ((int)((int32_t)(p) >> 22))
+
+#define PACK_POS(x16, y16) (((uint32_t)(x16) & 0xFFFFu) | ((uint32_t)(y16) << 16))
+#define PACK_VEL(vx15, vy15, held)   (((uint32_t)(vx15) & 0x7FFFu) | (((uint32_t)(vy15) & 0x7FFFu) << 15) | ((uint32_t)(held) << 30))
+
+static inline int32_t satVel(int32_t v) {
+  return (v > VEL_MAX) ? VEL_MAX : (v < -VEL_MAX - 1) ? -VEL_MAX - 1 : v;
+}
 
 static inline void loadBall(int i, Ball *b) {
   PackedBall p = packed_balls[i];
@@ -144,9 +159,11 @@ static inline void loadBall(int i, Ball *b) {
   b->vy = UNPACK_VY(p.vel);
 }
 
+// Stores with no held peg
 static inline void storeBall(int i, const Ball *b) {
-  packed_balls[i].pos = PACK(ROUND_SHIFT(b->x,  POS_SHIFT), ROUND_SHIFT(b->y,  POS_SHIFT));
-  packed_balls[i].vel = PACK(ROUND_SHIFT(b->vx, VEL_SHIFT), ROUND_SHIFT(b->vy, VEL_SHIFT));
+  packed_balls[i].pos = PACK_POS(ROUND_SHIFT(b->x, POS_SHIFT), ROUND_SHIFT(b->y, POS_SHIFT));
+  packed_balls[i].vel = PACK_VEL(satVel(ROUND_SHIFT(b->vx, VEL_SHIFT)),
+                                 satVel(ROUND_SHIFT(b->vy, VEL_SHIFT)), 0);
 }
 
 // Ball balls[MAX_BALLS];
@@ -176,7 +193,6 @@ int current_ball_count = START_BALLS;
 static uint8_t row_of_y[ROW_TABLE_SIZE];   // nearest peg row for pixel y - ROW_Y_MIN
 static int16_t row_left[NUM_ROWS];         // first peg x of the row minus PEG_SPACE/2
 static uint8_t row_base[NUM_ROWS];         // index of the row's first peg
-static uint8_t peg_row[NUM_PEGS];          // row of each peg index
 
 // Frame buffer pointer from the VGA driver (DMA rewrites it at each swap)
 extern char * current_draw_buffer;
@@ -491,7 +507,7 @@ void spawnBall(Ball *ball, int i) {
 
   // ball->vx = float2fix15(offset_milli / 1000.0f);
   ball->vy = 0; 
-  last_pegs[i] = 255; // at the top, did not hit any peg yet 
+  (void)i;            // storeBall starts it with no held peg
 }
 
 // Keep a fix15 value between lo and hi
@@ -607,7 +623,6 @@ void initPegs() {
     row_base[row] = peg_index;
 
     for(int col = 0; col <= row; col++){
-      peg_row[peg_index] = row;
       peg_index++;
     }
   }
@@ -662,7 +677,7 @@ static inline uint32_t fastRand(int core) {
 
 // Slow path: only runs when the ball is inside the bounding box of peg i.
 // Kept out of line so the common no-collision path stays small.
-static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i, uint8_t *last_peg,
+static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i, int *last_peg,
                                                                 fix15 dx, fix15 dy) {
   fix15 abs_dx = absfix15(dx);
   fix15 abs_dy = absfix15(dy);
@@ -730,6 +745,13 @@ static inline void plotBall(uint8_t *buf, int px, int py) {
   *(u16_unaligned *)(p + 80) |= m;
 }
 
+// Upper of the two peg rows bracketing pixel y: floor((y - PEG_START_Y) / ROW_SPACE).
+// Only called with y >= PEG_START_Y - ROW_SPACE (true within 12 px of any peg),
+// so an unsigned divide by the constant is exact.
+static inline int heldRowBase(int y_px) {
+  return (int)((unsigned)(y_px - (PEG_START_Y - ROW_SPACE)) / ROW_SPACE) - 1;
+}
+
 // Update and draw balls [start, end) on the calling core
 static void __not_in_flash_func(stepBalls)(int start, int end) {
   const int core = get_core_num();
@@ -739,9 +761,8 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
   uint8_t *buf = (uint8_t *)current_draw_buffer;
 
   PackedBall *pb = &packed_balls[start];
-  uint8_t *lpp   = &last_pegs[start];
 
-  for (int n = end - start; n > 0; n--, pb++, lpp++) {
+  for (int n = end - start; n > 0; n--, pb++) {
     // Two 32-bit loads, unpacked straight into fix15 registers
     uint32_t pos = pb->pos;
     uint32_t vel = pb->vel;
@@ -749,7 +770,23 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
     fix15 vy = UNPACK_VY(vel);
     fix15 x  = UNPACK_X(pos) + vx;
     fix15 y  = UNPACK_Y(pos) + vy;
-    uint8_t lp = *lpp;
+
+    // Held peg (-1 = none), decoded relative to the stored position
+    int lp = -1, lrow = 0;
+    uint32_t held = UNPACK_HELD(vel);
+    if (held) {
+      lrow = heldRowBase(STORED_Y_PX(pos)) + (int)held - 1;
+      int lcol = (int)((unsigned)(STORED_X_PX(pos) - row_left[lrow]) / PEG_SPACE);
+      lp = row_base[lrow] + lcol;
+
+      // Release once clearly away from it
+      fix15 ldx = x - int2fix15(PEG_CX(lrow, lcol));
+      fix15 ldy = y - int2fix15(PEG_CY(lrow));
+      if (absfix15(ldx) >= RELEASE_DISTANCE || absfix15(ldy) >= RELEASE_DISTANCE) {
+        lp = -1;
+      }
+    }
+
     bool respawn = false;
 
     // x < BALL_RADIUS or x > 640 - BALL_RADIUS, as one unsigned compare
@@ -765,25 +802,16 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
         int t   = fix2int15(x) - row_left[row];
         int col = (t <= 0) ? 0 : (int)((unsigned)t / PEG_SPACE);
         if (col > row) col = row;
-        int p = row_base[row] + col;
-
-        // Release the previous peg once clearly away from it
-        if (lp != 255) {
-          int lrow = peg_row[lp];
-          fix15 ldx = x - int2fix15(PEG_CX(lrow, lp - row_base[lrow]));
-          fix15 ldy = y - int2fix15(PEG_CY(lrow));
-          if (absfix15(ldx) >= RELEASE_DISTANCE || absfix15(ldy) >= RELEASE_DISTANCE) {
-            lp = 255;
-          }
-        }
 
         // Cheap bounding check; most balls stop here
         fix15 dx = x - int2fix15(PEG_CX(row, col));
         fix15 dy = y - int2fix15(PEG_CY(row));
         if (absfix15(dx) < COLLISION_DISTANCE && absfix15(dy) < COLLISION_DISTANCE) {
+          int p = row_base[row] + col;
           Ball b = { x, y, vx, vy };
           resolvePegCollision(&b, p, &lp, dx, dy);
           x = b.x;  y = b.y;  vx = b.vx;  vy = b.vy;
+          if (lp == p) lrow = row;
         }
       }
 
@@ -801,13 +829,23 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
       y  = 0;
       vx = (fix15)(fastRand(core) & 0xffff) - int2fix15(1);
       vy = 0;
-      lp = 255;
+      lp = -1;
     }
 
-    // Pack back into compact storage (two 32-bit stores + one byte)
-    pb->pos = PACK(ROUND_SHIFT(x,  POS_SHIFT), ROUND_SHIFT(y,  POS_SHIFT));
-    pb->vel = PACK(ROUND_SHIFT(vx, VEL_SHIFT), ROUND_SHIFT(vy, VEL_SHIFT));
-    *lpp = lp;
+    // Pack back into 8 bytes
+    int32_t x16 = ROUND_SHIFT(x, POS_SHIFT);
+    int32_t y16 = ROUND_SHIFT(y, POS_SHIFT);
+    uint32_t new_pos = PACK_POS(x16, y16);
+
+    // Re-encode the held peg relative to the position just stored
+    uint32_t new_held = 0;
+    if (lp >= 0) {
+      new_held = (uint32_t)(lrow - heldRowBase(STORED_Y_PX(new_pos)) + 1);
+      if (new_held > 2) new_held = 0;   // can't happen while held; fail safe = release
+    }
+
+    pb->pos = new_pos;
+    pb->vel = PACK_VEL(satVel(ROUND_SHIFT(vx, VEL_SHIFT)), satVel(ROUND_SHIFT(vy, VEL_SHIFT)), new_held);
 
     plotBall(buf, fix2int15(x), fix2int15(y));
   }
