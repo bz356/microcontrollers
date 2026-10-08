@@ -76,9 +76,6 @@ typedef signed int fix15 ;
 // Number of samples per period in sine table
 #define sine_table_size 256
 
-// Sine table
-int raw_sin[sine_table_size] ;
-
 // Table of values to be sent to DAC
 unsigned short DAC_data[sine_table_size] ;
 
@@ -162,18 +159,24 @@ int current_ball_count = START_BALLS;
 
 #define NUM_PEGS 136 // 1 + 2 + 3... + 16 = 136
 
-typedef struct Peg {
-  fix15 x;
-  fix15 y;
-} Peg;
 
-Peg pegs[NUM_PEGS];
+// Peg positions aren't stored: peg (row, col) is centered at
+//   x = 320 - row * PEG_SPACE/2 + col * PEG_SPACE,  y = PEG_START_Y + row * ROW_SPACE
+// and peg index = row_base[row] + col. Small tables (filled by initPegs) keep
+// the per-ball loop free of divides.
+#define PEG_CX(row, col) (320 - (row) * (PEG_SPACE / 2) + (col) * PEG_SPACE)
+#define PEG_CY(row)      (PEG_START_Y + (row) * ROW_SPACE)
 
-// Peg lookup tables (filled by initPegs), so the per-ball loop has no divides
-#define ROW_TABLE_SIZE 512
-static int8_t  row_of_y[ROW_TABLE_SIZE];   // nearest peg row for pixel y, or -1
+// Pixel y range where the nearest-row formula (y - 51) / 19 gives a valid row
+// (C division truncates toward zero, so y = 33..50 also maps to row 0)
+#define ROW_Y_MIN (PEG_START_Y - ROW_SPACE / 2 - ROW_SPACE + 1)
+#define ROW_Y_MAX (PEG_START_Y - ROW_SPACE / 2 + NUM_ROWS * ROW_SPACE - 1)
+#define ROW_TABLE_SIZE (ROW_Y_MAX - ROW_Y_MIN + 1)
+
+static uint8_t row_of_y[ROW_TABLE_SIZE];   // nearest peg row for pixel y - ROW_Y_MIN
 static int16_t row_left[NUM_ROWS];         // first peg x of the row minus PEG_SPACE/2
-static uint8_t row_base[NUM_ROWS];         // index of the row's first peg in pegs[]
+static uint8_t row_base[NUM_ROWS];         // index of the row's first peg
+static uint8_t peg_row[NUM_PEGS];          // row of each peg index
 
 // Frame buffer pointer from the VGA driver (DMA rewrites it at each swap)
 extern char * current_draw_buffer;
@@ -337,8 +340,8 @@ static void dmaSetup(void) {
     // Build sine table and DAC data table
     int i ;
     for (i=0; i<(sine_table_size); i++){
-        raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
-        DAC_data[i] = DAC_config_chan_B | (raw_sin[i] & 0x0fff) ;
+        int raw_sin = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
+        DAC_data[i] = DAC_config_chan_B | (raw_sin & 0x0fff) ;
     }
 
     // Select DMA channels
@@ -577,8 +580,6 @@ void drawArena() {
 // (x - PEG_RADIUS + k, y - PEG_RADIUS + r). Same shape drawCircle makes.
 #define PEG_SIZE (2 * PEG_RADIUS + 1)
 static uint16_t peg_sprite[PEG_SIZE];
-static int16_t peg_px[NUM_PEGS];   // left edge of the sprite, in pixels
-static int16_t peg_py[NUM_PEGS];   // top edge of the sprite, in pixels
 
 static void buildPegSprite(void) {
   int r = PEG_RADIUS;
@@ -600,29 +601,21 @@ void initPegs() {
   int peg_index = 0;
 
   for(int row = 0; row < NUM_ROWS; row++){
-    int y = PEG_START_Y + row * ROW_SPACE;
-    int start_x = 320 - (row * PEG_SPACE) / 2; // figure out where first peg of each row starts
+    int start_x = PEG_CX(row, 0); // where the first peg of each row starts
 
     row_left[row] = start_x - PEG_SPACE / 2;
     row_base[row] = peg_index;
 
     for(int col = 0; col <= row; col++){
-      int x = start_x + col * PEG_SPACE;
-
-      pegs[peg_index].x = int2fix15(x);
-      pegs[peg_index].y = int2fix15(y);
-      peg_px[peg_index] = x - PEG_RADIUS;
-      peg_py[peg_index] = y - PEG_RADIUS;
-
+      peg_row[peg_index] = row;
       peg_index++;
     }
   }
 
   // Nearest row for every pixel y (exactly what the old per-ball divide gave,
   // including C's round-toward-zero; negative y never maps to a row)
-  for (int y = 0; y < ROW_TABLE_SIZE; y++) {
-    int row = (y - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
-    row_of_y[y] = (row >= 0 && row < NUM_ROWS) ? row : -1;
+  for (int y = ROW_Y_MIN; y <= ROW_Y_MAX; y++) {
+    row_of_y[y - ROW_Y_MIN] = (y - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
   }
 
   buildPegSprite();
@@ -632,201 +625,19 @@ void initPegs() {
 void drawPegs() {
   uint8_t *buf = (uint8_t *)current_draw_buffer;
 
-  for(int i = 0; i < NUM_PEGS; i++){
-    int px = peg_px[i];
-    uint8_t *p = buf + 80 * peg_py[i] + (px >> 3);
-    int sh = px & 7;
+  for(int row = 0; row < NUM_ROWS; row++){
+    uint8_t *row_ptr = buf + 80 * (PEG_CY(row) - PEG_RADIUS);
 
-    for (int r = 0; r < PEG_SIZE; r++, p += 80) {
-      *(u32_unaligned *)p |= (uint32_t)peg_sprite[r] << sh;
-    }
-  }
-}
+    for(int col = 0; col <= row; col++){
+      int px = PEG_CX(row, col) - PEG_RADIUS;   // sprite's left edge
+      uint8_t *p = row_ptr + (px >> 3);
+      int sh = px & 7;
 
-void handlePegCollisions(Ball *ball, int j) {
-
-  // Which row is the ball closest to? Rows are 19 px apart and collisions
-  // need < 10 px, so only the nearest row can be hit.
-  int by = fix2int15(ball->y);
-  int row = (by - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
-  if (row < 0 || row >= NUM_ROWS) {
-    //ball->last_peg = -1;
-    return;
-  }
-
-  // Which peg in that row is closest horizontally?
-  int bx = fix2int15(ball->x);
-  int start_x = 320 - (row * PEG_SPACE) / 2;
-  int col = (bx - start_x + PEG_SPACE / 2) / PEG_SPACE;
-  if (col < 0) col = 0;
-  if (col > row) col = row;
-
-  // Row r starts at index r*(r+1)/2 in pegs[]
-  int i = row * (row + 1) / 2 + col;
-
-  fix15 dx = ball->x - pegs[i].x;
-  fix15 dy = ball->y - pegs[i].y;
-
-  // If we were touching a peg before, check whether we've moved away from it
-  if (last_pegs[j] < 255) {
-      fix15 last_dx = ball->x - pegs[last_pegs[j]].x;
-      fix15 last_dy = ball->y - pegs[last_pegs[j]].y;
-
-      fix15 release_distance =
-          int2fix15(BALL_RADIUS + PEG_RADIUS + 2);
-
-      // Once clearly outside the previous peg, allow another thunk later
-      if (absfix15(last_dx) >= release_distance || absfix15(last_dy) >= release_distance) {
-          last_pegs[j] = 255;
+      for (int r = 0; r < PEG_SIZE; r++, p += 80) {
+        *(u32_unaligned *)p |= (uint32_t)peg_sprite[r] << sh;
       }
-  }
-
-  fix15 abs_dx = absfix15(dx);
-  fix15 abs_dy = absfix15(dy);
-
-  // cheap bounding check 
-  if(abs_dx >= COLLISION_DISTANCE || abs_dy >= COLLISION_DISTANCE){
-    return;
-  }
-
-  // exact squared-distance collision check
-  // fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
-
-    // ALPHA-MAX + BETA-MIN
-    //
-    // lecture optimization:
-    //
-    // sqrt(dx^2 + dy^2)
-    //
-    // becomes:
-    //
-    // max(|dx|, |dy|) + min(|dx|, |dy|)/4
-    //
-    // alpha = 1
-    // beta  = 1/4
-
-    fix15 max_d;
-    fix15 min_d;
-
-    if(abs_dx > abs_dy){
-      max_d = abs_dx;
-      min_d = abs_dy;
-    }else{
-      max_d = abs_dy;
-      min_d = abs_dx;
     }
-
-    // /4 is also a shift by 2 
-    fix15 approx_distance = max_d + (min_d >> 2);
-
-
-
-  // float dx_float = fix2float15(dx) ;
-  // float dy_float = fix2float15(dy) ;
-
-  // float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
-  
-  // use approx distance for actual collision test
-  if ((approx_distance >= COLLISION_DISTANCE) || approx_distance == 0) {
-    //ball->last_peg = -1;
-    return;
   }
-
-  // WANNA DO UNNORMALIZED VECTOR CALCULATION HERE INSETAD
-  fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
-
-  if (dist_squared == 0) {
-      return;
-  }
-  fix15 dot = multfix15(ball->vx, dx) + multfix15(ball->vy, dy);
-
-  // only reflect if ball is moving INTO the peg 
-  if(dot < 0){
-
-    // factor = -2(v dot d) / (d dot d)
-    fix15 factor = divfix(-2 * dot, dist_squared);
-
-    // v' = v + factor * d 
-    ball->vx += multfix15(factor, dx);
-    ball->vy += multfix15(factor, dy);
-
-    // Push ball just outside the peg 
-    // float dx_float = fix2float15(dx);
-    // float dy_float = fix2float15(dy);
-
-    // float distance = sqrt(dx_float * dx_float + dy_float * dy_float);
-
-    // fix15 normal_x = float2fix15(dx_float / distance);
-    // fix15 normal_y = float2fix15(dy_float / distance);
-
-    // fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
-
-    // ball->x = pegs[i].x + multfix15(normal_x, push_distance);
-    // ball->y = pegs[i].y + multfix15(normal_y, push_distance);
-
-    // Push ball just outside the peg 
-  
-    
-    // normalize using approx distance
-    // fix15 normal_x = divfix(dx, approx_distance);
-    // fix15 normal_y = divfix(dy, approx_distance);
-
-    // normalize without using divfix
-
-    // first scale dx, dy, and distance down equally so that 
-    // (scaled_dx << 15) fits safely in a 32-bit integer
-    int32_t scaled_dx = ((int32_t)dx >> 4);
-    int32_t scaled_dy = ((int32_t)dy >> 4);
-
-    int32_t scaled_distance = ((int32_t)approx_distance >> 4);
-
-    if (scaled_distance == 0) {
-      return;
-    }
-
-    fix15 normal_x = (fix15)((scaled_dx * (1 << 15)) / scaled_distance);
-    fix15 normal_y = (fix15)((scaled_dy * (1 << 15)) / scaled_distance);
-
-    // move ball just outside peg
-    fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
-
-    ball->x = pegs[i].x + multfix15(normal_x, push_distance);
-
-    ball->y = pegs[i].y + multfix15(normal_y, push_distance);
-
-      // Only thunk and lose energy on a NEW peg
-    if (i != last_pegs[j]) {
-      thunk();
-      // ball->vx = multfix15(bounciness, ball->vx);
-      // ball->vy = multfix15(bounciness, ball->vy);
-      // ball->last_peg = i;
-
-      if(bounciness == HALF_FIX15){
-        // 0.5x = x/2 so use a shift instead of multiplication
-        ball->vx >>= 1;
-        ball->vy >>= 1;
-      }else{
-        ball->vx = multfix15(bounciness, ball->vx);
-        ball->vy = multfix15(bounciness, ball->vy);
-
-      }
-
-      last_pegs[j] = i;
-    }
-
-  }
-
-  // fix15 intermediate_term =
-  //     -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy));
-
-  // // Move ball just outside the peg
-  // ball->x = pegs[i].x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
-  // ball->y = pegs[i].y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
-
-  // // Reflect velocity off the peg
-  // ball->vx = ball->vx + multfix15(normal_x, intermediate_term);
-  // ball->vy = ball->vy + multfix15(normal_y, intermediate_term);
-
 }
 
 // ==================================================
@@ -855,6 +666,8 @@ static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i
                                                                 fix15 dx, fix15 dy) {
   fix15 abs_dx = absfix15(dx);
   fix15 abs_dy = absfix15(dy);
+  fix15 peg_cx = ball->x - dx;   // dx = ball - peg
+  fix15 peg_cy = ball->y - dy;
 
   // alpha max + beta min (alpha = 1, beta = 1/4)
   fix15 max_d = (abs_dx > abs_dy) ? abs_dx : abs_dy;
@@ -886,8 +699,8 @@ static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i
 
   // Push ball just outside the peg
   fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
-  ball->x = pegs[i].x + multfix15(normal_x, push_distance);
-  ball->y = pegs[i].y + multfix15(normal_y, push_distance);
+  ball->x = peg_cx + multfix15(normal_x, push_distance);
+  ball->y = peg_cy + multfix15(normal_y, push_distance);
 
   // Only thunk and lose energy on a NEW peg
   if (i != *last_peg) {
@@ -944,10 +757,10 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
       respawn = true;   // off the side
     } else {
       // Nearest peg row from a table instead of a divide
-      int by  = fix2int15(y);
-      int row = ((unsigned)by < ROW_TABLE_SIZE) ? row_of_y[by] : -1;
+      unsigned ty = (unsigned)(fix2int15(y) - ROW_Y_MIN);
 
-      if (row >= 0) {
+      if (ty < ROW_TABLE_SIZE) {
+        int row = row_of_y[ty];
         // Nearest peg in the row (same rounding as before, unsigned divide by constant)
         int t   = fix2int15(x) - row_left[row];
         int col = (t <= 0) ? 0 : (int)((unsigned)t / PEG_SPACE);
@@ -956,16 +769,17 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
 
         // Release the previous peg once clearly away from it
         if (lp != 255) {
-          fix15 ldx = x - pegs[lp].x;
-          fix15 ldy = y - pegs[lp].y;
+          int lrow = peg_row[lp];
+          fix15 ldx = x - int2fix15(PEG_CX(lrow, lp - row_base[lrow]));
+          fix15 ldy = y - int2fix15(PEG_CY(lrow));
           if (absfix15(ldx) >= RELEASE_DISTANCE || absfix15(ldy) >= RELEASE_DISTANCE) {
             lp = 255;
           }
         }
 
         // Cheap bounding check; most balls stop here
-        fix15 dx = x - pegs[p].x;
-        fix15 dy = y - pegs[p].y;
+        fix15 dx = x - int2fix15(PEG_CX(row, col));
+        fix15 dy = y - int2fix15(PEG_CY(row));
         if (absfix15(dx) < COLLISION_DISTANCE && absfix15(dy) < COLLISION_DISTANCE) {
           Ball b = { x, y, vx, vy };
           resolvePegCollision(&b, p, &lp, dx, dy);
@@ -1016,34 +830,6 @@ static void __not_in_flash_func(runBallChunks)(void) {
     if (end > count) end = count;
     stepBalls(start, end);
   }
-}
-
-// used to be wallsAndEdges
-void updateBallPos(Ball *ball, int i){
-  ball->x += ball->vx;
-  ball->y += ball->vy;
-
-  // If ball goes off left or right side, respawn at the top
-  if (ball->x < int2fix15(BALL_RADIUS) || ball->x > int2fix15(640 - BALL_RADIUS)) {
-      spawnBall(ball, i);
-      return;
-  }
-  
-  //fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
-
-  handlePegCollisions(ball, i);
-
-  // If ball reaches top of histogram, drop again from top
-    // If ball reaches top of histogram, drop again from top
-  if (ball->y >= int2fix15(HIST_TOP)) {
-    int core = get_core_num();                       // 0 or 1
-    histogram[core][bucketForX(fix2int15(ball->x))]++;
-    ball_count[core]++;
-    // spawnBall(ball, i);
-    spawnBall(ball, i);
-    return;
-  }
-  ball->vy += gravity;
 }
 
 // Detect wallstrikes, update velocity and position
