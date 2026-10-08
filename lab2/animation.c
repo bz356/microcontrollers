@@ -244,14 +244,14 @@ void enc_init(void)
 #define COLLISION_SQUARED  multfix15(COLLISION_DISTANCE, COLLISION_DISTANCE)
 
 // 0.5 in fix15 = 2^14
-//#define HALF_FIX15 (1 << 14) UNCOMMENT FOR BOUNCINESS OPTIMIZATION
+#define HALF_FIX15 (1 << 14) 
 
-// fix15 peg_x = int2fix15(320) ;
-// fix15 peg_y = int2fix15(240) ;
+fix15 peg_x = int2fix15(320) ;
+fix15 peg_y = int2fix15(240) ;
 
 fix15 gravity = float2fix15(0.37) ;
 fix15 bounciness = float2fix15(0.5) ;
-// fix15 bounciness = HALF_FIX15 ; UNCOMMENT FOR BOUNCINESS OPTIMIZATION
+fix15 bounciness = HALF_FIX15 ; 
 
 int global_ctr_chan;
 int global_data_chan;
@@ -697,21 +697,21 @@ void handlePegCollisions(Ball *ball) {
       // Only thunk and lose energy on a NEW peg
     if (i != ball->last_peg) {
       thunk();
-      ball->vx = multfix15(bounciness, ball->vx);
-      ball->vy = multfix15(bounciness, ball->vy);
-      ball->last_peg = i;
-
-      // if(bounciness == HALF_FIX15){
-      //   // 0.5x = x/2 so use a shift instead of multiplication
-      //   ball->vx >>= 1;
-      //   ball->vy >>= 1;
-      // }else{
-      //   ball->vx = multfix15(bounciness, ball->vx);
-      //   ball->vy = multfix15(bounciness, ball->vy);
-
-      // }
-
+      // ball->vx = multfix15(bounciness, ball->vx);
+      // ball->vy = multfix15(bounciness, ball->vy);
       // ball->last_peg = i;
+
+      if(bounciness == HALF_FIX15){
+        // 0.5x = x/2 so use a shift instead of multiplication
+        ball->vx >>= 1;
+        ball->vy >>= 1;
+      }else{
+        ball->vx = multfix15(bounciness, ball->vx);
+        ball->vy = multfix15(bounciness, ball->vy);
+
+      }
+
+      ball->last_peg = i;
     }
 
   }
