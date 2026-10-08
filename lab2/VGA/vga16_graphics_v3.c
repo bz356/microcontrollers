@@ -338,6 +338,9 @@ void initVGA() {
     pio_sm_put_blocking(pio, vsync_sm, V_ACTIVE);
     pio_sm_put_blocking(pio, rgb_sm, RGB_ACTIVE);
 
+    pio_sm_exec(pio, rgb_sm, pio_encode_pull(false, true));
+    pio_sm_exec(pio, rgb_sm, pio_encode_out(pio_isr, 32));
+
 
     // Start the two pio machine IN SYNC
     // Note that the RGB state machine is running at full speed,

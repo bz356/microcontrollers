@@ -10,22 +10,32 @@
 .define pixelhold 11
 .define PUBLIC vid_freq 400
 
-pull block 					; Pull from FIFO to OSR (only once)
-out isr, 32                 ; move pull block value to input shift register
+; ISR is loaded with RGB_ACTIVE (639) once from C via pio_sm_exec in initVGA()
+
+; pull block 					; Pull from FIFO to OSR (only once)
+; out isr, 32                 ; move pull block value to input shift register
 
 .wrap_target
 
 set pins, 0 				; Zero RGB pins in blanking
-mov x, isr			     	; Initialize counter variable
+mov x, isr			     	; Initialize counter variable (639 -> 640 pixels)
 
 wait 1 irq 1 [2]			; Wait for vsync active mode (starts 5 cycles after execution)
 
 colorout:
 	out y, 1			    ; Read color bit
-    jmp y-- setpix
-setpix:
-	mov pins, !y [pixelhold]
-	jmp x-- colorout		; Stay here thru horizontal active mode
+    ; jmp y-- setpix
+    jmp !y black            ; 0 -> black
+; setpix:
+	; mov pins, !y [pixelhold]
+	; jmp x-- colorout		; Stay here thru horizontal active mode
+white:
+    set pins, 15 [11]       ; all 4 color pins
+    jmp pixel_done         ; 1 cycle
+black:
+    set pins, 0 [12]        ; all 4 color pins
+pixel_done: 
+    jmp x-- colorout        ; Stay here thru horizontal active mode
 
 .wrap
 
@@ -41,8 +51,9 @@ static inline void rgb_program_init(PIO pio, uint sm, uint offset, uint pin) {
     // Map the state machine's SET and OUT pin group to three pins, the `pin`
     // parameter to this function is the lowest one. These groups overlap.
     sm_config_set_set_pins(&c, pin, 4);
-    sm_config_set_out_pins(&c, pin, 4);
+    // sm_config_set_out_pins(&c, pin, 4);
 
+    // shift right (LSB first), autopull every 32 bits
     sm_config_set_out_shift(&c, true, true, 32);
 
     // Set clock division (Commented out, this one runs at full speed)
