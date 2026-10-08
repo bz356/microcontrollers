@@ -99,7 +99,7 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball definition
 #define MAX_BALLS 25000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 1
+#define START_BALLS 25000
 
 typedef struct __attribute__((packed)) Ball {
   fix15 x; 
@@ -107,8 +107,10 @@ typedef struct __attribute__((packed)) Ball {
   fix15 vx; 
   fix15 vy; 
 
-  uint8_t last_peg; // to keep track of when to "thunk"
+  // uint8_t last_peg; // to keep track of when to "thunk"
 } Ball;
+
+uint8_t last_pegs[MAX_BALLS];
 
 Ball balls[MAX_BALLS];
 int current_ball_count = START_BALLS;
@@ -238,9 +240,9 @@ void enc_init(void)
 // fix15 boid1_vy ;
 
 #define BALL_RADIUS 2
-#define PEG_RADIUS 6
+#define PEG_RADIUS 7
 
-#define COLLISION_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS -2)
+#define COLLISION_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS -1)
 #define COLLISION_SQUARED  multfix15(COLLISION_DISTANCE, COLLISION_DISTANCE)
 
 // 0.5 in fix15 = 2^14
@@ -412,7 +414,7 @@ void spawnBoid(fix15* x, fix15* y, fix15* vx, fix15* vy, int direction)
   *vy = 0 ;
 }
 
-void spawnBall(Ball *ball) {
+void spawnBall(Ball *ball, int i) {
   ball->x = int2fix15(320);
   ball->y = int2fix15(0);
 
@@ -427,7 +429,7 @@ void spawnBall(Ball *ball) {
 
   // ball->vx = float2fix15(offset_milli / 1000.0f);
   ball->vy = 0; 
-  ball->last_peg = 255; // at the top, did not hit any peg yet 
+  last_pegs[i] = 255; // at the top, did not hit any peg yet 
 }
 
 // Keep a fix15 value between lo and hi
@@ -445,7 +447,7 @@ void changeBallCount(int clicks) {
   if (n < 0) n = 0;
   if (n > MAX_BALLS) n = MAX_BALLS;
   for (int i = current_ball_count; i < n; i++) {
-    spawnBall(&balls[i]);
+    spawnBall(&balls[i], i);
   }
   current_ball_count = n;
 }
@@ -546,7 +548,7 @@ void drawPegs() {
   
 }
 
-void handlePegCollisions(Ball *ball) {
+void handlePegCollisions(Ball *ball, int j) {
 
   // Which row is the ball closest to? Rows are 19 px apart and collisions
   // need < 10 px, so only the nearest row can be hit.
@@ -571,16 +573,16 @@ void handlePegCollisions(Ball *ball) {
   fix15 dy = ball->y - pegs[i].y;
 
   // If we were touching a peg before, check whether we've moved away from it
-  if (ball->last_peg < 255) {
-      fix15 last_dx = ball->x - pegs[ball->last_peg].x;
-      fix15 last_dy = ball->y - pegs[ball->last_peg].y;
+  if (last_pegs[j] < 255) {
+      fix15 last_dx = ball->x - pegs[last_pegs[j]].x;
+      fix15 last_dy = ball->y - pegs[last_pegs[j]].y;
 
       fix15 release_distance =
           int2fix15(BALL_RADIUS + PEG_RADIUS + 2);
 
       // Once clearly outside the previous peg, allow another thunk later
       if (absfix15(last_dx) >= release_distance || absfix15(last_dy) >= release_distance) {
-          ball->last_peg = 255;
+          last_pegs[j] = 255;
       }
   }
 
@@ -698,7 +700,7 @@ void handlePegCollisions(Ball *ball) {
     ball->y = pegs[i].y + multfix15(normal_y, push_distance);
 
       // Only thunk and lose energy on a NEW peg
-    if (i != ball->last_peg) {
+    if (i != last_pegs[j]) {
       thunk();
       // ball->vx = multfix15(bounciness, ball->vx);
       // ball->vy = multfix15(bounciness, ball->vy);
@@ -714,7 +716,7 @@ void handlePegCollisions(Ball *ball) {
 
       }
 
-      ball->last_peg = i;
+      last_pegs[j] = i;
     }
 
   }
@@ -733,19 +735,19 @@ void handlePegCollisions(Ball *ball) {
 }
 
 // used to be wallsAndEdges
-void updateBallPos(Ball *ball){
+void updateBallPos(Ball *ball, int i){
   ball->x += ball->vx;
   ball->y += ball->vy;
 
   // If ball goes off left or right side, respawn at the top
   if (ball->x < int2fix15(BALL_RADIUS) || ball->x > int2fix15(640 - BALL_RADIUS)) {
-      spawnBall(ball);
+      spawnBall(ball, i);
       return;
   }
   
   //fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
 
-  handlePegCollisions(ball);
+  handlePegCollisions(ball, i);
 
   // If ball reaches top of histogram, drop again from top
     // If ball reaches top of histogram, drop again from top
@@ -753,7 +755,7 @@ void updateBallPos(Ball *ball){
     int core = get_core_num();                       // 0 or 1
     histogram[core][bucketForX(fix2int15(ball->x))]++;
     ball_count[core]++;
-    spawnBall(ball);
+    spawnBall(ball, i);
     return;
   }
   ball->vy += gravity;
@@ -882,7 +884,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 
     // Start every ball at the top
     for (int i = 0; i < MAX_BALLS; i++) {
-      spawnBall(&balls[i]);
+      spawnBall(&balls[i], i);
     }
 
     while(1) {
@@ -917,7 +919,7 @@ static PT_THREAD (protothread_anim(struct pt *pt))
       drawPegs();
 
       for (int i = 0; i < current_ball_count / 2; i++) {
-        updateBallPos(&balls[i]);
+        updateBallPos(&balls[i], i);
         drawBall(&balls[i]);
       }
 
@@ -944,7 +946,7 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
     while(1) {
       PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
       for (int i = current_ball_count / 2; i < current_ball_count; i++) {
-        updateBallPos(&balls[i]);
+        updateBallPos(&balls[i], i);
         drawBall(&balls[i]);
       }
       sem_release(&done_semaphore);
