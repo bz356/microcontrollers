@@ -62,4 +62,5 @@ pico_enable_stdio_uart(VGA_Animation_Demo 0)
 # must match with executable name
 pico_add_extra_outputs(VGA_Animation_Demo)
 
-# g
+# pico_set_binary_type(VGA_Animation_Demo copy_to_ram)
+target_compile_definitions(VGA_Animation_Demo PRIVATE PICO_FLASH_SPI_CLKDIV=6)

@@ -974,7 +974,7 @@ int main(){
   vreg_disable_voltage_limit();
   vreg_set_voltage(VREG_VOLTAGE_1_50);
   sleep_ms(10);                         
-  if (!set_sys_clock_khz(300000, false)) {   // false = return instead of assert
+  if (!set_sys_clock_khz(400000, false)) {   // false = return instead of assert
     set_sys_clock_khz(250000, true);         // fall back to a known-good clock
   }
   sleep_ms(1000);

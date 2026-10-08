@@ -7,8 +7,8 @@
 .program rgb
 ; define the pixel hold times which depend on clock freq
 ; pixelhold should be 2 for 150 MHz in black and white modification
-.define pixelhold 7
-.define PUBLIC vid_freq 300
+.define pixelhold 11
+.define PUBLIC vid_freq 400
 
 pull block 					; Pull from FIFO to OSR (only once)
 out isr, 32                 ; move pull block value to input shift register
