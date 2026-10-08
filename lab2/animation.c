@@ -58,8 +58,8 @@
 // === the fixed point macros ========================================
 typedef signed int fix15 ;
 #define multfix15(a,b) ((fix15)((((signed long long)(a))*((signed long long)(b)))>>15))
-#define float2fix15(a) ((fix15)((a)*32768.0)) // 2^15
-#define fix2float15(a) ((float)(a)/32768.0)
+#define float2fix15(a) ((fix15)((a)*32768.0f)) // 2^15
+#define fix2float15(a) ((float)(a)/32768.0f)
 #define absfix15(a) abs(a) 
 #define int2fix15(a) ((fix15)(a << 15))
 #define fix2int15(a) ((int)(a >> 15))
@@ -100,13 +100,13 @@ unsigned short * address_pointer = &DAC_data[0] ;
 // Ball count at reset: tune to the largest value that keeps the LED off
 #define START_BALLS 2000
 
-typedef struct Ball {
+typedef struct __attribute__((packed)) Ball {
   fix15 x; 
   fix15 y;
   fix15 vx; 
   fix15 vy; 
 
-  int last_peg; // to keep track of when to "thunk"
+  int16_t last_peg; // to keep track of when to "thunk"
 } Ball;
 
 Ball balls[MAX_BALLS];
