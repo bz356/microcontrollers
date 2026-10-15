@@ -76,6 +76,9 @@ typedef signed int fix15 ;
 // Number of samples per period in sine table
 #define sine_table_size 256
 
+// Sine table
+int raw_sin[sine_table_size] ;
+
 // Table of values to be sent to DAC
 unsigned short DAC_data[sine_table_size] ;
 
@@ -94,9 +97,9 @@ unsigned short * address_pointer = &DAC_data[0] ;
 #define SPI_PORT spi0
 
 // Ball definition
-#define MAX_BALLS 55000
+#define MAX_BALLS 47000
 // Ball count at reset: tune to the largest value that keeps the LED off
-#define START_BALLS 55000
+#define START_BALLS 25000
 
 typedef struct  Ball {
   fix15 x; 
@@ -107,63 +110,42 @@ typedef struct  Ball {
   // uint8_t last_peg; // to keep track of when to "thunk"
 } Ball;
 
-// Compact storage: 8 bytes per ball (55,000 balls = 440 KB).
-//   pos = x (bits 0-15, Q10.6 unsigned) | y (bits 16-31, Q9.6 signed)
-//   vel = vx (bits 0-14, Q6.8 signed) | vy (bits 15-29, Q6.8 signed) | held (bits 30-31)
-// Velocities saturate at +/-64 px/frame (a full-height fall at max gravity is ~38).
-//
-// "held" replaces the old per-ball last_peg byte. A held peg is always within
-// 11 px of the ball (it's released as soon as the ball gets farther), so it must
-// sit in one of the two rows bracketing the ball, and only one peg per row can be
-// that close. 2 bits are enough: 0 = none, 1 = upper row, 2 = lower row, with the
-// column recovered from x. See heldRowBase().
-typedef struct PackedBall {
-  uint32_t pos;
-  uint32_t vel;
-} PackedBall;
+uint8_t last_pegs[MAX_BALLS];
 
-static PackedBall packed_balls[MAX_BALLS] __attribute__((aligned(8)));
+// Compact storage: 9 bytes per ball
+static uint16_t ball_x[MAX_BALLS];    // Q10.6
+static int16_t  ball_y[MAX_BALLS];    // Q9.6
+static int16_t  ball_vx[MAX_BALLS];   // Q7.8
+static int16_t  ball_vy[MAX_BALLS];   // Q7.8
+// static uint8_t  ball_peg[MAX_BALLS];
 
 // Shifts between fix15 (15 frac bits) and storage formats
 #define POS_SHIFT 9   // 15 - 6
 #define VEL_SHIFT 7   // 15 - 8
-#define VEL_MAX   16383   // 15-bit signed limit, in Q6.8 units
 
 // Round instead of truncate, so positions don't drift left over time
 #define ROUND_SHIFT(v, s) (((v) + (1 << ((s) - 1))) >> (s))
 
-// Unpack: move each field to the top of the word, then arithmetic-shift
-// down so it lands already scaled to fix15 (no separate multiply)
-#define UNPACK_X(p)  ((fix15)(((uint32_t)(p) << 16) >> (16 - POS_SHIFT)))
-#define UNPACK_Y(p)  ((fix15)((int32_t)((p) & 0xFFFF0000u) >> (16 - POS_SHIFT)))
-#define UNPACK_VX(v) ((fix15)((int32_t)((uint32_t)(v) << 17) >> (17 - VEL_SHIFT)))
-#define UNPACK_VY(v) ((fix15)((int32_t)(((uint32_t)(v) << 2) & 0xFFFE0000u) >> (17 - VEL_SHIFT)))
-#define UNPACK_HELD(v) ((uint32_t)(v) >> 30)
-
-// Whole-pixel position as stored (what the held-peg code is relative to)
-#define STORED_X_PX(p) ((int)(((p) & 0xFFFFu) >> 6))
-#define STORED_Y_PX(p) ((int)((int32_t)(p) >> 22))
-
-#define PACK_POS(x16, y16) (((uint32_t)(x16) & 0xFFFFu) | ((uint32_t)(y16) << 16))
-#define PACK_VEL(vx15, vy15, held)   (((uint32_t)(vx15) & 0x7FFFu) | (((uint32_t)(vy15) & 0x7FFFu) << 15) | ((uint32_t)(held) << 30))
-
-static inline int32_t satVel(int32_t v) {
-  return (v > VEL_MAX) ? VEL_MAX : (v < -VEL_MAX - 1) ? -VEL_MAX - 1 : v;
+static inline int16_t clamp16(int32_t v) {
+  // if (v >  32767) return  32767;
+  // if (v < -32768) return -32768;
+  return (int16_t)v;
 }
 
 static inline void loadBall(int i, Ball *b) {
-  PackedBall p = packed_balls[i];
-  b->x  = UNPACK_X(p.pos);
-  b->y  = UNPACK_Y(p.pos);
-  b->vx = UNPACK_VX(p.vel);
-  b->vy = UNPACK_VY(p.vel);
+  b->x  = (fix15)ball_x[i] << POS_SHIFT;
+  b->y  = (fix15)ball_y[i]  * (1 << POS_SHIFT);   // multiply, since shifting
+  b->vx = (fix15)ball_vx[i] * (1 << VEL_SHIFT);   // negatives left is undefined in C
+  b->vy = (fix15)ball_vy[i] * (1 << VEL_SHIFT);
+  // b->last_peg = ball_peg[i];
 }
 
-// Stores with no held peg
 static inline void storeBall(int i, const Ball *b) {
-  packed_balls[i].pos = PACK_POS(ROUND_SHIFT(b->x, POS_SHIFT), ROUND_SHIFT(b->y, POS_SHIFT));
-  packed_balls[i].vel = PACK_VEL(satVel(ROUND_SHIFT(b->vx, VEL_SHIFT)),
-                                 satVel(ROUND_SHIFT(b->vy, VEL_SHIFT)), 0);
+  ball_x[i]   = (uint16_t)ROUND_SHIFT(b->x, POS_SHIFT);
+  ball_y[i]   = clamp16(ROUND_SHIFT(b->y,  POS_SHIFT));
+  ball_vx[i]  = clamp16(ROUND_SHIFT(b->vx, VEL_SHIFT));
+  ball_vy[i]  = clamp16(ROUND_SHIFT(b->vy, VEL_SHIFT));
+  // ball_peg[i] = b->last_peg;
 }
 
 // Ball balls[MAX_BALLS];
@@ -176,30 +158,12 @@ int current_ball_count = START_BALLS;
 
 #define NUM_PEGS 136 // 1 + 2 + 3... + 16 = 136
 
+typedef struct Peg {
+  fix15 x;
+  fix15 y;
+} Peg;
 
-// Peg positions aren't stored: peg (row, col) is centered at
-//   x = 320 - row * PEG_SPACE/2 + col * PEG_SPACE,  y = PEG_START_Y + row * ROW_SPACE
-// and peg index = row_base[row] + col. Small tables (filled by initPegs) keep
-// the per-ball loop free of divides.
-#define PEG_CX(row, col) (320 - (row) * (PEG_SPACE / 2) + (col) * PEG_SPACE)
-#define PEG_CY(row)      (PEG_START_Y + (row) * ROW_SPACE)
-
-// Pixel y range where the nearest-row formula (y - 51) / 19 gives a valid row
-// (C division truncates toward zero, so y = 33..50 also maps to row 0)
-#define ROW_Y_MIN (PEG_START_Y - ROW_SPACE / 2 - ROW_SPACE + 1)
-#define ROW_Y_MAX (PEG_START_Y - ROW_SPACE / 2 + NUM_ROWS * ROW_SPACE - 1)
-#define ROW_TABLE_SIZE (ROW_Y_MAX - ROW_Y_MIN + 1)
-
-static uint8_t row_of_y[ROW_TABLE_SIZE];   // nearest peg row for pixel y - ROW_Y_MIN
-static int16_t row_left[NUM_ROWS];         // first peg x of the row minus PEG_SPACE/2
-static uint8_t row_base[NUM_ROWS];         // index of the row's first peg
-
-// Frame buffer pointer from the VGA driver (DMA rewrites it at each swap)
-extern char * current_draw_buffer;
-
-// Unaligned access types, so a pixel run that crosses a byte boundary is one RMW
-typedef uint16_t __attribute__((aligned(1), may_alias)) u16_unaligned;
-typedef uint32_t __attribute__((aligned(1), may_alias)) u32_unaligned;
+Peg pegs[NUM_PEGS];
 
 
 volatile int enc_delta = 0; // clicks since the animation thread last checked (+ = clockwise)
@@ -334,12 +298,6 @@ int global_data_chan;
 semaphore_t draw_semaphore ;
 semaphore_t done_semaphore ;
 
-// Both cores pull chunks of balls from a shared counter, so whichever core
-// has less other work (core 0 also draws text/pegs/histogram) does more balls
-#define BALL_CHUNK 512
-static volatile int next_ball;
-static spin_lock_t *work_lock;
-
 static void dmaSetup(void) {
   // Initialize SPI channel (channel, baud rate set to 20MHz)
     spi_init(SPI_PORT, 20000000) ;
@@ -356,8 +314,8 @@ static void dmaSetup(void) {
     // Build sine table and DAC data table
     int i ;
     for (i=0; i<(sine_table_size); i++){
-        int raw_sin = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
-        DAC_data[i] = DAC_config_chan_B | (raw_sin & 0x0fff) ;
+        raw_sin[i] = (int)(2047 * sin((float)i*6.283/(float)sine_table_size) + 2047); //12 bit
+        DAC_data[i] = DAC_config_chan_B | (raw_sin[i] & 0x0fff) ;
     }
 
     // Select DMA channels
@@ -507,7 +465,7 @@ void spawnBall(Ball *ball, int i) {
 
   // ball->vx = float2fix15(offset_milli / 1000.0f);
   ball->vy = 0; 
-  (void)i;            // storeBall starts it with no held peg
+  last_pegs[i] = 255; // at the top, did not hit any peg yet 
 }
 
 // Keep a fix15 value between lo and hi
@@ -592,73 +550,232 @@ void drawArena() {
   drawHLine(100, 380, 440, WHITE) ;
 }
 
-// Peg outline as one bitmask per row: bit k of peg_sprite[r] is pixel
-// (x - PEG_RADIUS + k, y - PEG_RADIUS + r). Same shape drawCircle makes.
-#define PEG_SIZE (2 * PEG_RADIUS + 1)
-static uint16_t peg_sprite[PEG_SIZE];
-
-static void buildPegSprite(void) {
-  int r = PEG_RADIUS;
-  int f = 1 - r, ddF_x = 1, ddF_y = -2 * r, x = 0, y = r;
-  #define SPRITE_SET(px, py) (peg_sprite[(py) + r] |= (uint16_t)(1u << ((px) + r)))
-  SPRITE_SET(0, r);  SPRITE_SET(0, -r);
-  SPRITE_SET(r, 0);  SPRITE_SET(-r, 0);
-  while (x < y) {
-    if (f >= 0) { y--; ddF_y += 2; f += ddF_y; }
-    x++; ddF_x += 2; f += ddF_x;
-    SPRITE_SET( x,  y); SPRITE_SET(-x,  y); SPRITE_SET( x, -y); SPRITE_SET(-x, -y);
-    SPRITE_SET( y,  x); SPRITE_SET(-y,  x); SPRITE_SET( y, -x); SPRITE_SET(-y, -x);
-  }
-  #undef SPRITE_SET
-}
-
-// keep track of all the pegs coords in the pegs array
+// keep track of all the pegs coords in the pegs array 
 void initPegs() {
   int peg_index = 0;
 
   for(int row = 0; row < NUM_ROWS; row++){
-    int start_x = PEG_CX(row, 0); // where the first peg of each row starts
-
-    row_left[row] = start_x - PEG_SPACE / 2;
-    row_base[row] = peg_index;
+    int y = PEG_START_Y + row * ROW_SPACE;
+    int start_x = 320 - (row * PEG_SPACE) / 2; // figure out where first peg of each row starts
 
     for(int col = 0; col <= row; col++){
+      int x = start_x + col * PEG_SPACE;
+
+      pegs[peg_index].x = int2fix15(x);
+      pegs[peg_index].y = int2fix15(y);
+
       peg_index++;
+      
+
     }
   }
-
-  // Nearest row for every pixel y (exactly what the old per-ball divide gave,
-  // including C's round-toward-zero; negative y never maps to a row)
-  for (int y = ROW_Y_MIN; y <= ROW_Y_MAX; y++) {
-    row_of_y[y - ROW_Y_MIN] = (y - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
-  }
-
-  buildPegSprite();
 }
 
-// actually draw the pegs: OR each sprite row into the frame with one 32-bit RMW
+// actually draw the pegs, going thru the peg array one by one
 void drawPegs() {
-  uint8_t *buf = (uint8_t *)current_draw_buffer;
 
-  for(int row = 0; row < NUM_ROWS; row++){
-    uint8_t *row_ptr = buf + 80 * (PEG_CY(row) - PEG_RADIUS);
+  for(int i = 0; i < NUM_PEGS; i++){
+    short x = (short)fix2int15(pegs[i].x);
+    short y = (short)fix2int15(pegs[i].y);
 
-    for(int col = 0; col <= row; col++){
-      int px = PEG_CX(row, col) - PEG_RADIUS;   // sprite's left edge
-      uint8_t *p = row_ptr + (px >> 3);
-      int sh = px & 7;
-
-      for (int r = 0; r < PEG_SIZE; r++, p += 80) {
-        *(u32_unaligned *)p |= (uint32_t)peg_sprite[r] << sh;
-      }
-    }
+    drawCircle(x, y, PEG_RADIUS, WHITE);
+    // drawPixel(x + PEG_RADIUS, y, WHITE); // right
+    // drawPixel(x - PEG_RADIUS, y, WHITE); // left
+    // drawPixel(x, y + PEG_RADIUS, WHITE); // down
+    // drawPixel(x, y - PEG_RADIUS, WHITE); // up
   }
+  
 }
 
+void handlePegCollisions(Ball *ball, int j) {
+
+  // Which row is the ball closest to? Rows are 19 px apart and collisions
+  // need < 10 px, so only the nearest row can be hit.
+  int by = fix2int15(ball->y);
+  int row = (by - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
+  if (row < 0 || row >= NUM_ROWS) {
+    //ball->last_peg = -1;
+    return;
+  }
+
+  // Which peg in that row is closest horizontally?
+  int bx = fix2int15(ball->x);
+  int start_x = 320 - (row * PEG_SPACE) / 2;
+  int col = (bx - start_x + PEG_SPACE / 2) / PEG_SPACE;
+  if (col < 0) col = 0;
+  if (col > row) col = row;
+
+  // Row r starts at index r*(r+1)/2 in pegs[]
+  int i = row * (row + 1) / 2 + col;
+
+  fix15 dx = ball->x - pegs[i].x;
+  fix15 dy = ball->y - pegs[i].y;
+
+  // If we were touching a peg before, check whether we've moved away from it
+  if (last_pegs[j] < 255) {
+      fix15 last_dx = ball->x - pegs[last_pegs[j]].x;
+      fix15 last_dy = ball->y - pegs[last_pegs[j]].y;
+
+      fix15 release_distance =
+          int2fix15(BALL_RADIUS + PEG_RADIUS + 2);
+
+      // Once clearly outside the previous peg, allow another thunk later
+      if (absfix15(last_dx) >= release_distance || absfix15(last_dy) >= release_distance) {
+          last_pegs[j] = 255;
+      }
+  }
+
+  fix15 abs_dx = absfix15(dx);
+  fix15 abs_dy = absfix15(dy);
+
+  // cheap bounding check 
+  if(abs_dx >= COLLISION_DISTANCE || abs_dy >= COLLISION_DISTANCE){
+    return;
+  }
+
+  // exact squared-distance collision check
+  // fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+
+    // ALPHA-MAX + BETA-MIN
+    //
+    // lecture optimization:
+    //
+    // sqrt(dx^2 + dy^2)
+    //
+    // becomes:
+    //
+    // max(|dx|, |dy|) + min(|dx|, |dy|)/4
+    //
+    // alpha = 1
+    // beta  = 1/4
+
+    fix15 max_d;
+    fix15 min_d;
+
+    if(abs_dx > abs_dy){
+      max_d = abs_dx;
+      min_d = abs_dy;
+    }else{
+      max_d = abs_dy;
+      min_d = abs_dx;
+    }
+
+    // /4 is also a shift by 2 
+    fix15 approx_distance = max_d + (min_d >> 2);
+
+
+
+  // float dx_float = fix2float15(dx) ;
+  // float dy_float = fix2float15(dy) ;
+
+  // float distance = sqrt((dx_float * dx_float) + (dy_float * dy_float)) ;
+  
+  // use approx distance for actual collision test
+  if ((approx_distance >= COLLISION_DISTANCE) || approx_distance == 0) {
+    //ball->last_peg = -1;
+    return;
+  }
+
+  // WANNA DO UNNORMALIZED VECTOR CALCULATION HERE INSETAD
+  fix15 dist_squared = multfix15(dx, dx) + multfix15(dy, dy);
+
+  if (dist_squared == 0) {
+      return;
+  }
+  fix15 dot = multfix15(ball->vx, dx) + multfix15(ball->vy, dy);
+
+  // only reflect if ball is moving INTO the peg 
+  if(dot < 0){
+
+    // factor = -2(v dot d) / (d dot d)
+    fix15 factor = divfix(-2 * dot, dist_squared);
+
+    // v' = v + factor * d 
+    ball->vx += multfix15(factor, dx);
+    ball->vy += multfix15(factor, dy);
+
+    // Push ball just outside the peg 
+    // float dx_float = fix2float15(dx);
+    // float dy_float = fix2float15(dy);
+
+    // float distance = sqrt(dx_float * dx_float + dy_float * dy_float);
+
+    // fix15 normal_x = float2fix15(dx_float / distance);
+    // fix15 normal_y = float2fix15(dy_float / distance);
+
+    // fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
+
+    // ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+    // ball->y = pegs[i].y + multfix15(normal_y, push_distance);
+
+    // Push ball just outside the peg 
+  
+    
+    // normalize using approx distance
+    // fix15 normal_x = divfix(dx, approx_distance);
+    // fix15 normal_y = divfix(dy, approx_distance);
+
+    // normalize without using divfix
+
+    // first scale dx, dy, and distance down equally so that 
+    // (scaled_dx << 15) fits safely in a 32-bit integer
+    int32_t scaled_dx = ((int32_t)dx >> 4);
+    int32_t scaled_dy = ((int32_t)dy >> 4);
+
+    int32_t scaled_distance = ((int32_t)approx_distance >> 4);
+
+    if (scaled_distance == 0) {
+      return;
+    }
+
+    fix15 normal_x = (fix15)((scaled_dx * (1 << 15)) / scaled_distance);
+    fix15 normal_y = (fix15)((scaled_dy * (1 << 15)) / scaled_distance);
+
+    // move ball just outside peg
+    fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
+
+    ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+
+    ball->y = pegs[i].y + multfix15(normal_y, push_distance);
+
+      // Only thunk and lose energy on a NEW peg
+    if (i != last_pegs[j]) {
+      thunk();
+      // ball->vx = multfix15(bounciness, ball->vx);
+      // ball->vy = multfix15(bounciness, ball->vy);
+      // ball->last_peg = i;
+
+      if(bounciness == HALF_FIX15){
+        // 0.5x = x/2 so use a shift instead of multiplication
+        ball->vx >>= 1;
+        ball->vy >>= 1;
+      }else{
+        ball->vx = multfix15(bounciness, ball->vx);
+        ball->vy = multfix15(bounciness, ball->vy);
+
+      }
+
+      last_pegs[j] = i;
+    }
+
+  }
+
+  // fix15 intermediate_term =
+  //     -2 * (multfix15(normal_x, ball->vx) + multfix15(normal_y, ball->vy));
+
+  // // Move ball just outside the peg
+  // ball->x = pegs[i].x + multfix15(normal_x, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
+  // ball->y = pegs[i].y + multfix15(normal_y, int2fix15(PEG_RADIUS + BALL_RADIUS + 1));
+
+  // // Reflect velocity off the peg
+  // ball->vx = ball->vx + multfix15(normal_x, intermediate_term);
+  // ball->vy = ball->vy + multfix15(normal_y, intermediate_term);
+
+}
+
+/* CLAUDE REVIEW THIS*/
 // ==================================================
-// Fast per-ball update: load, step, store and draw in one pass.
-// Everything here runs from RAM (__not_in_flash_func) so the hot loop
-// never waits on the flash cache, which both cores share.
+// Fast per-ball update: load, step, store and draw in one pass
 // ==================================================
 
 #define RELEASE_DISTANCE int2fix15(BALL_RADIUS + PEG_RADIUS + 2)
@@ -676,13 +793,10 @@ static inline uint32_t fastRand(int core) {
 }
 
 // Slow path: only runs when the ball is inside the bounding box of peg i.
-// Kept out of line so the common no-collision path stays small.
-static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i, int *last_peg,
-                                                                fix15 dx, fix15 dy) {
+// Same math as the second half of handlePegCollisions.
+static void resolvePegCollision(Ball *ball, int i, int j, fix15 dx, fix15 dy) {
   fix15 abs_dx = absfix15(dx);
   fix15 abs_dy = absfix15(dy);
-  fix15 peg_cx = ball->x - dx;   // dx = ball - peg
-  fix15 peg_cy = ball->y - dy;
 
   // alpha max + beta min (alpha = 1, beta = 1/4)
   fix15 max_d = (abs_dx > abs_dy) ? abs_dx : abs_dy;
@@ -698,12 +812,11 @@ static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i
   if (dot >= 0) return;   // moving away from the peg
 
   // v' = v - 2(v.d)/(d.d) * d
-  // Single-precision FPU divide (~14 cycles) instead of a 64-bit integer divide
-  fix15 factor = (fix15)((float)(-2 * dot) * 32768.0f / (float)dist_squared);
+  fix15 factor = divfix(-2 * dot, dist_squared);
   ball->vx += multfix15(factor, dx);
   ball->vy += multfix15(factor, dy);
 
-  // Normalize with a scaled-down 32-bit divide (hardware SDIV)
+  // Normalize with a scaled-down 32-bit divide
   int32_t scaled_dx = dx >> 4;
   int32_t scaled_dy = dy >> 4;
   int32_t scaled_distance = approx_distance >> 4;
@@ -714,11 +827,11 @@ static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i
 
   // Push ball just outside the peg
   fix15 push_distance = int2fix15(PEG_RADIUS + BALL_RADIUS + 1);
-  ball->x = peg_cx + multfix15(normal_x, push_distance);
-  ball->y = peg_cy + multfix15(normal_y, push_distance);
+  ball->x = pegs[i].x + multfix15(normal_x, push_distance);
+  ball->y = pegs[i].y + multfix15(normal_y, push_distance);
 
   // Only thunk and lose energy on a NEW peg
-  if (i != *last_peg) {
+  if (i != last_pegs[j]) {
     thunk();
     if (bounciness == HALF_FIX15) {
       ball->vx >>= 1;
@@ -727,91 +840,57 @@ static void __no_inline_not_in_flash_func(resolvePegCollision)(Ball *ball, int i
       ball->vx = multfix15(bounciness, ball->vx);
       ball->vy = multfix15(bounciness, ball->vy);
     }
-    *last_peg = i;
+    last_pegs[j] = i;
   }
 }
 
-// Draw the 2x2 ball covering pixels (px-1..px, py-1..py).
-// One unaligned 16-bit RMW per row handles the case where the two pixels
-// straddle a byte boundary, so there's no branching on alignment.
-static inline void plotBall(uint8_t *buf, int px, int py) {
-  int x0 = px - 1;
-  int y0 = py - 1;
-  if ((unsigned)x0 > 638u || (unsigned)y0 > 478u) return;
-
-  uint8_t *p = buf + 80 * y0 + (x0 >> 3);
-  uint16_t m = (uint16_t)(3u << (x0 & 7));
-  *(u16_unaligned *)p        |= m;
-  *(u16_unaligned *)(p + 80) |= m;
-}
-
-// Upper of the two peg rows bracketing pixel y: floor((y - PEG_START_Y) / ROW_SPACE).
-// Only called with y >= PEG_START_Y - ROW_SPACE (true within 12 px of any peg),
-// so an unsigned divide by the constant is exact.
-static inline int heldRowBase(int y_px) {
-  return (int)((unsigned)(y_px - (PEG_START_Y - ROW_SPACE)) / ROW_SPACE) - 1;
-}
-
 // Update and draw balls [start, end) on the calling core
-static void __not_in_flash_func(stepBalls)(int start, int end) {
+static void stepBalls(int start, int end) {
   const int core = get_core_num();
-  const fix15 g = gravity;            // read once per chunk, not once per ball
+  const fix15 g = gravity;            // read once per frame, not once per ball
   int *hist = histogram[core];
   uint32_t fallen = 0;
-  uint8_t *buf = (uint8_t *)current_draw_buffer;
 
-  PackedBall *pb = &packed_balls[start];
-
-  for (int n = end - start; n > 0; n--, pb++) {
-    // Two 32-bit loads, unpacked straight into fix15 registers
-    uint32_t pos = pb->pos;
-    uint32_t vel = pb->vel;
-    fix15 vx = UNPACK_VX(vel);
-    fix15 vy = UNPACK_VY(vel);
-    fix15 x  = UNPACK_X(pos) + vx;
-    fix15 y  = UNPACK_Y(pos) + vy;
-
-    // Held peg (-1 = none), decoded relative to the stored position
-    int lp = -1, lrow = 0;
-    uint32_t held = UNPACK_HELD(vel);
-    if (held) {
-      lrow = heldRowBase(STORED_Y_PX(pos)) + (int)held - 1;
-      int lcol = (int)((unsigned)(STORED_X_PX(pos) - row_left[lrow]) / PEG_SPACE);
-      lp = row_base[lrow] + lcol;
-
-      // Release once clearly away from it
-      fix15 ldx = x - int2fix15(PEG_CX(lrow, lcol));
-      fix15 ldy = y - int2fix15(PEG_CY(lrow));
-      if (absfix15(ldx) >= RELEASE_DISTANCE || absfix15(ldy) >= RELEASE_DISTANCE) {
-        lp = -1;
-      }
-    }
-
+  for (int i = start; i < end; i++) {
+    // Unpack straight into registers and apply velocity
+    fix15 vx = (fix15)ball_vx[i] * (1 << VEL_SHIFT);
+    fix15 vy = (fix15)ball_vy[i] * (1 << VEL_SHIFT);
+    fix15 x  = ((fix15)ball_x[i] << POS_SHIFT) + vx;
+    fix15 y  = (fix15)ball_y[i] * (1 << POS_SHIFT) + vy;
     bool respawn = false;
 
-    // x < BALL_RADIUS or x > 640 - BALL_RADIUS, as one unsigned compare
-    if ((uint32_t)(x - int2fix15(BALL_RADIUS)) > (uint32_t)int2fix15(640 - 2 * BALL_RADIUS)) {
+    if (x < int2fix15(BALL_RADIUS) || x > int2fix15(640 - BALL_RADIUS)) {
       respawn = true;   // off the side
     } else {
-      // Nearest peg row from a table instead of a divide
-      unsigned ty = (unsigned)(fix2int15(y) - ROW_Y_MIN);
+      // Nearest peg (same lookup as before)
+      int by  = fix2int15(y);
+      int row = (by - PEG_START_Y + ROW_SPACE / 2) / ROW_SPACE;
 
-      if (ty < ROW_TABLE_SIZE) {
-        int row = row_of_y[ty];
-        // Nearest peg in the row (same rounding as before, unsigned divide by constant)
-        int t   = fix2int15(x) - row_left[row];
-        int col = (t <= 0) ? 0 : (int)((unsigned)t / PEG_SPACE);
+      if (row >= 0 && row < NUM_ROWS) {
+        int bx = fix2int15(x);
+        int start_x = 320 - (row * PEG_SPACE) / 2;
+        int col = (bx - start_x + PEG_SPACE / 2) / PEG_SPACE;
+        if (col < 0)   col = 0;
         if (col > row) col = row;
+        int p = row * (row + 1) / 2 + col;
+
+        // Release the previous peg once clearly away from it
+        uint8_t lp = last_pegs[i];
+        if (lp < 255) {
+          fix15 ldx = x - pegs[lp].x;
+          fix15 ldy = y - pegs[lp].y;
+          if (absfix15(ldx) >= RELEASE_DISTANCE || absfix15(ldy) >= RELEASE_DISTANCE) {
+            last_pegs[i] = 255;
+          }
+        }
 
         // Cheap bounding check; most balls stop here
-        fix15 dx = x - int2fix15(PEG_CX(row, col));
-        fix15 dy = y - int2fix15(PEG_CY(row));
+        fix15 dx = x - pegs[p].x;
+        fix15 dy = y - pegs[p].y;
         if (absfix15(dx) < COLLISION_DISTANCE && absfix15(dy) < COLLISION_DISTANCE) {
-          int p = row_base[row] + col;
           Ball b = { x, y, vx, vy };
-          resolvePegCollision(&b, p, &lp, dx, dy);
+          resolvePegCollision(&b, p, i, dx, dy);
           x = b.x;  y = b.y;  vx = b.vx;  vy = b.vy;
-          if (lp == p) lrow = row;
         }
       }
 
@@ -829,45 +908,53 @@ static void __not_in_flash_func(stepBalls)(int start, int end) {
       y  = 0;
       vx = (fix15)(fastRand(core) & 0xffff) - int2fix15(1);
       vy = 0;
-      lp = -1;
+      last_pegs[i] = 255;
     }
 
-    // Pack back into 8 bytes
-    int32_t x16 = ROUND_SHIFT(x, POS_SHIFT);
-    int32_t y16 = ROUND_SHIFT(y, POS_SHIFT);
-    uint32_t new_pos = PACK_POS(x16, y16);
+    // Pack back into compact storage
+    ball_x[i]  = (uint16_t)ROUND_SHIFT(x,  POS_SHIFT);
+    ball_y[i]  = (int16_t) ROUND_SHIFT(y,  POS_SHIFT);
+    ball_vx[i] = (int16_t) ROUND_SHIFT(vx, VEL_SHIFT);
+    ball_vy[i] = (int16_t) ROUND_SHIFT(vy, VEL_SHIFT);
 
-    // Re-encode the held peg relative to the position just stored
-    uint32_t new_held = 0;
-    if (lp >= 0) {
-      new_held = (uint32_t)(lrow - heldRowBase(STORED_Y_PX(new_pos)) + 1);
-      if (new_held > 2) new_held = 0;   // can't happen while held; fail safe = release
-    }
-
-    pb->pos = new_pos;
-    pb->vel = PACK_VEL(satVel(ROUND_SHIFT(vx, VEL_SHIFT)), satVel(ROUND_SHIFT(vy, VEL_SHIFT)), new_held);
-
-    plotBall(buf, fix2int15(x), fix2int15(y));
+    // Draw
+    short px = (short)fix2int15(x);
+    short py = (short)fix2int15(y);
+    drawHLine(px - 1, py - 1, 2, BLUE);
+    drawHLine(px - 1, py,     2, BLUE);
   }
 
-  ball_count[core] += fallen;   // one shared-memory write per chunk instead of per ball
+  ball_count[core] += fallen;   // one shared-memory write per frame instead of per ball
 }
 
-// Claim chunks of balls until none are left. Called on both cores each frame.
-static void __not_in_flash_func(runBallChunks)(void) {
-  const int count = current_ball_count;
+/*CLAUDE END*/
 
-  while (1) {
-    uint32_t save = spin_lock_blocking(work_lock);
-    int start = next_ball;
-    next_ball = start + BALL_CHUNK;
-    spin_unlock(work_lock, save);
+// used to be wallsAndEdges
+void updateBallPos(Ball *ball, int i){
+  ball->x += ball->vx;
+  ball->y += ball->vy;
 
-    if (start >= count) break;
-    int end = start + BALL_CHUNK;
-    if (end > count) end = count;
-    stepBalls(start, end);
+  // If ball goes off left or right side, respawn at the top
+  if (ball->x < int2fix15(BALL_RADIUS) || ball->x > int2fix15(640 - BALL_RADIUS)) {
+      spawnBall(ball, i);
+      return;
   }
+  
+  //fix15 collision_distance = int2fix15(BALL_RADIUS + PEG_RADIUS);
+
+  handlePegCollisions(ball, i);
+
+  // If ball reaches top of histogram, drop again from top
+    // If ball reaches top of histogram, drop again from top
+  if (ball->y >= int2fix15(HIST_TOP)) {
+    int core = get_core_num();                       // 0 or 1
+    histogram[core][bucketForX(fix2int15(ball->x))]++;
+    ball_count[core]++;
+    // spawnBall(ball, i);
+    spawnBall(ball, i);
+    return;
+  }
+  ball->vy += gravity;
 }
 
 // Detect wallstrikes, update velocity and position
@@ -1009,37 +1096,39 @@ static PT_THREAD (protothread_anim(struct pt *pt))
 
       // Clear the buffer
       clearLowFrame(0, BLACK);
+      sem_release(&draw_semaphore);   // wake core 1
 
-      // Pegs go in before core 1 starts, so the two cores never
-      // read-modify-write the same peg bytes at the same time
-      drawPegs();
-
-      // Reset the shared ball counter, then wake core 1
-      next_ball = 0;
-      sem_release(&draw_semaphore);
-
-      // On-screen info (integer formatting: no float printf)
+      // On-screen info
       sprintf(text, "Mode: %s", mode_names[mode]);
       drawTextGLCD(10, 10, text, WHITE, BLACK);
       sprintf(text, "# of balls: %d", current_ball_count);
       drawTextGLCD(10, 20, text, WHITE, BLACK);
       sprintf(text, "Total balls: %u", (unsigned)(ball_count[0] + ball_count[1]));
       drawTextGLCD(10, 30, text, WHITE, BLACK);
-      {
-        int b100 = (bounciness * 100 + HALF_FIX15) >> 15;   // value x 100, rounded
-        int g100 = (gravity    * 100 + HALF_FIX15) >> 15;
-        sprintf(text, "Bounciness: %d.%02d", b100 / 100, b100 % 100);
-        drawTextGLCD(10, 40, text, WHITE, BLACK);
-        sprintf(text, "Gravity: %d.%02d", g100 / 100, g100 % 100);
-        drawTextGLCD(10, 50, text, WHITE, BLACK);
-      }
+      sprintf(text, "Bounciness: %.2f", fix2float15(bounciness));
+      drawTextGLCD(10, 40, text, WHITE, BLACK);
+      sprintf(text, "Gravity: %.2f", fix2float15(gravity));
+      drawTextGLCD(10, 50, text, WHITE, BLACK);
       sprintf(text, "Time since boot (s): %d", (int)(time_us_64() / 1000000));
       drawTextGLCD(10, 60, text, WHITE, BLACK);
       sprintf(text, "Spare time (us): %d", spare_us);
       drawTextGLCD(10, 70, text, WHITE, BLACK);
 
-      // Help core 1 with the balls until they're all claimed
-      runBallChunks();
+      // Draw the pegs
+      drawPegs();
+
+      // for (int i = 0; i < current_ball_count / 2; i++) {
+      //   updateBallPos(&balls[i], i);
+      //   drawBall(&balls[i]);
+      //   Ball b;
+      //   loadBall(i, &b);
+      //   updateBallPos(&b, i);
+      //   storeBall(i, &b);
+      //   drawBall(&b);
+
+        
+      // }
+      stepBalls(0, current_ball_count / 2);
 
       PT_SEM_SDK_WAIT(pt, &done_semaphore);   // wait for core 1
 
@@ -1063,7 +1152,18 @@ static PT_THREAD (protothread_anim1(struct pt *pt))
 
     while(1) {
       PT_SEM_SDK_WAIT(pt, &draw_semaphore) ;
-      runBallChunks();
+      // for (int i = current_ball_count / 2; i < current_ball_count; i++) {
+      //   updateBallPos(&balls[i], i);
+      //   drawBall(&balls[i]);
+      //   Ball b;
+      //   loadBall(i, &b);
+      //   updateBallPos(&b, i);
+      //   storeBall(i, &b);
+      //   drawBall(&b);
+
+        
+      // }
+      stepBalls(current_ball_count / 2, current_ball_count);
       sem_release(&done_semaphore);
     }
   PT_END(pt);
@@ -1123,9 +1223,6 @@ int main(){
   // Arguments: pointer to sem, initial count, max count
   sem_init(&draw_semaphore, 0, 1) ;
   sem_init(&done_semaphore, 0, 1) ;
-
-  // Hardware spinlock guarding the shared ball counter
-  work_lock = spin_lock_instance(spin_lock_claim_unused(true));
 
   multicore_reset_core1();
   multicore_launch_core1(&core1_main);
