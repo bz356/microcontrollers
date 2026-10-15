@@ -28,7 +28,8 @@ pico_sdk_init()
 
 add_executable(VGA_Animation_Demo)
 
-add_compile_options(-Ofast)
+# Must be target_compile_options: add_compile_options after add_executable never reaches this target
+target_compile_options(VGA_Animation_Demo PRIVATE -Ofast)
 
 # must match with pio filename and executable name from above
 pico_generate_pio_header(VGA_Animation_Demo ${CMAKE_CURRENT_LIST_DIR}/VGA/hsync.pio)
