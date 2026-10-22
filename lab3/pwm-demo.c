@@ -61,6 +61,7 @@ void on_pwm_wrap() {
         old_control = control ;
         pwm_set_chan_level(slice_num, PWM_CHAN_A, control);
     }
+    // printf("Current control level: %d\n", control);
 }
 
 // User input thread

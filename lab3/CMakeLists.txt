@@ -55,6 +55,11 @@ target_link_libraries(MPU6050_IMU
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(PWM_Demo)
+<<<<<<< Updated upstream
 pico_enable_stdio_usb(PWM_Demo 1)
 pico_enable_stdio_uart(PWM_Demo 0)
 pico_add_extra_outputs(MPU6050_IMU)
+=======
+pico_enable_stdio_usb(PWM_Demo 0)
+pico_enable_stdio_uart(PWM_Demo 1)
+>>>>>>> Stashed changes
