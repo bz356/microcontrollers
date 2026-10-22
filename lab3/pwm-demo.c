@@ -190,8 +190,8 @@ void on_pwm_wrap() {
     filtered_ax = filtered_ax
                 + ((acceleration[0] - filtered_ax) >> 4);
 
-    filtered_ay = filtered_ay
-                + ((acceleration[1] - filtered_ay) >> 4);
+    filtered_az = filtered_az
+                + ((acceleration[2] - filtered_az) >> 4);
 
     // Accelerometer angle (degrees - 15.16 fixed point) 
     // Only ONE of the two lines below will be used, depending whether or not a small angle approximation is appropriate
@@ -359,11 +359,11 @@ int main() {
 
     // Initialize accelerometer filters
     filtered_ax = acceleration[0];
-    filtered_ay = acceleration[1];
+    filtered_az = acceleration[2];
 
     // Get initial absolute angle from accelerometer
     accel_angle = multfix15(
-        float2fix15(atan2(-filtered_ax, filtered_ay) + PI),
+        float2fix15(atan2(-filtered_ax, filtered_az) + PI),
         oneeightyoverpi
     );
 
