@@ -46,6 +46,92 @@
 // GPIO we're using for PWM
 #define PWM_OUT 4
 
+
+// We will start drawing at column 81
+#define LEFT_EDGE 81 
+
+// Rescale the measurements for display
+#define OLD_RANGE 500.  // (+/- 250)
+#define NEW_RANGE 150.  // (looks nice on VGA)
+#define OLD_MIN -250. 
+#define OLD_MAX 250. 
+#define ACCEL_SCALE 120.0
+
+// Place the plots
+#define TOP_PLOT_BOTTOM 230
+#define BOTTOM_PLOT_BOTTOM 430
+#define PLOT_WIDTH 530
+
+// Arrays in which raw measurements will be stored
+fix15 acceleration[3], gyro[3];
+
+// Arrays for circular display buffer
+fix15 ax[PLOT_WIDTH] ;
+fix15 ay[PLOT_WIDTH] ;
+fix15 az[PLOT_WIDTH] ;
+fix15 gx[PLOT_WIDTH] ;
+fix15 gy[PLOT_WIDTH] ;
+fix15 gz[PLOT_WIDTH] ;
+
+// Pointer to head of buffer
+volatile int head = 0 ;
+
+// character array
+char screentext[40];
+
+// draw speed
+volatile int threshold = 10 ;
+
+// Some macros for max/min/abs
+#define min(a,b) ((a<b) ? a:b)
+#define max(a,b) ((a<b) ? b:a)
+#define abs(a) ((a>0) ? a:-a)
+
+// semaphore
+static struct pt_sem vga_semaphore ;
+
+// Some paramters for PWM
+#define WRAPVAL 6000
+#define CLKDIV  25.0
+uint slice_num ;
+
+
+void drawAxes() {
+    // Draw the static aspects of the display
+    setTextSize(1) ;
+    setTextColor(WHITE);
+
+    // Draw bottom plot
+    drawHLine(75, 430, 5, CYAN) ;
+    drawHLine(75, 355, 5, CYAN) ;
+    drawHLine(75, 280, 5, CYAN) ;
+    drawVLine(80, 280, 150, CYAN) ;
+    sprintf(screentext, "0") ;
+    setCursor(50, 350) ;
+    writeString(screentext) ;
+    sprintf(screentext, "+2") ;
+    setCursor(50, 280) ;
+    writeString(screentext) ;
+    sprintf(screentext, "-2") ;
+    setCursor(50, 425) ;
+    writeString(screentext) ;
+
+    // Draw top plot
+    drawHLine(75, 230, 5, CYAN) ;
+    drawHLine(75, 155, 5, CYAN) ;
+    drawHLine(75, 80, 5, CYAN) ;
+    drawVLine(80, 80, 150, CYAN) ;
+    sprintf(screentext, "0") ;
+    setCursor(50, 150) ;
+    writeString(screentext) ;
+    sprintf(screentext, "+250") ;
+    setCursor(45, 75) ;
+    writeString(screentext) ;
+    sprintf(screentext, "-250") ;
+    setCursor(45, 225) ;
+    writeString(screentext) ;
+}
+
 // Variable to hold PWM slice number
 uint slice_num ;
 
@@ -53,16 +139,91 @@ uint slice_num ;
 volatile int control ;
 volatile int old_control ;
 
+volatile int throttle = 10 ;
+
 // PWM interrupt service routine
 void on_pwm_wrap() {
     // Clear the interrupt flag that brought us here
     pwm_clear_irq(pwm_gpio_to_slice_num(PWM_OUT));
+    gpio_put(14, !gpio_get(14)) ;
+
+    // Read the IMU
+    // NOTE! This is in 15.16 fixed point. Accel in g's, gyro in deg/s
+    // If you want these values in floating point, call fix2float15() on
+    // the raw measurements.
+    mpu6050_read_raw(acceleration, gyro);
+
+    // Increment drawspeed controller
+    throttle += 1 ;
+    // Maintain a circular buffer for display
+    if ((throttle >= threshold)) { 
+        // Zero drawspeed controller
+        throttle = 0 ;
+
+        // Replace oldest data in accel arrays with new sample
+        ax[head] = acceleration[0] ;
+        ay[head] = acceleration[1] ;
+        az[head] = acceleration[2] ;
+
+        // Replace oldest data in gyro arrays with new sample
+        gx[head] = gyro[0] ;
+        gy[head] = gyro[1] ;
+        gz[head] = gyro[2] ;
+
+        // Move the pointer to the oldest data
+        head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1) ;
+
+    }
+    // Motor Code 
     // Update duty cycle
     if (control!=old_control) {
         old_control = control ;
         pwm_set_chan_level(slice_num, PWM_CHAN_A, control);
     }
     // printf("Current control level: %d\n", control);
+}
+
+static PT_THREAD (protothread_draw(struct pt *pt))
+{
+    PT_BEGIN(pt) ;
+
+    static int start ;
+    static int i ;
+
+    // Draw axes
+    drawAxes() ;
+    // Copy to other buffer
+    copy_buffer_to_other() ;
+
+    while(1) {
+        // Wait for a buffer swap
+        PT_YIELD_UNTIL(pt, draw_start_signal()) ;
+        gpio_put(15, !gpio_get(15)) ;
+        
+        // Clear the buffer, draw the axes
+        clearLowFrame(0, BLACK) ;
+        drawAxes() ;
+
+        // Plot data oldest-->newest
+        start = head ;
+        for (i = 0; i < PLOT_WIDTH; i++) {
+            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
+                (int)(NEW_RANGE*((float)((fix2float15(ax[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), WHITE) ;
+            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
+                (int)(NEW_RANGE*((float)((fix2float15(ay[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), RED) ;
+            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
+                (int)(NEW_RANGE*((float)((fix2float15(az[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), GREEN) ;
+            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
+                (int)(NEW_RANGE*((float)((fix2float15(gx[start]))-OLD_MIN)/OLD_RANGE))), WHITE) ;
+            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
+                (int)(NEW_RANGE*((float)((fix2float15(gy[start]))-OLD_MIN)/OLD_RANGE))), RED) ;
+            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
+                (int)(NEW_RANGE*((float)((fix2float15(gz[start]))-OLD_MIN)/OLD_RANGE))), GREEN) ;
+            start = ((start+1)==PLOT_WIDTH) ? 0 : (start+1) ;
+        }
+    }
+
+    PT_END(pt) ;
 }
 
 // User input thread

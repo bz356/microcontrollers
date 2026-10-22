@@ -35,6 +35,12 @@ pico_generate_pio_header(PWM_Demo ${CMAKE_CURRENT_LIST_DIR}/VGA/rgb.pio)
 
 # must match with executable name and source file names
 target_sources(PWM_Demo PRIVATE pwm-demo.c VGA/vga16_graphics_v3.c mpu6050.c)
+<<<<<<< Updated upstream
+=======
+#target_sources(MPU6050_IMU PRIVATE imu_demo.c VGA/vga16_graphics_v3.c mpu6050.c)
+
+
+>>>>>>> Stashed changes
 
 # Add pico_multicore which is required for multicore functionality
 target_link_libraries(PWM_Demo
