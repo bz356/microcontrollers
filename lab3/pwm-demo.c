@@ -7,6 +7,19 @@
  * 
  * HARDWARE CONNECTIONS
  *   - GPIO 4 ---> PWM output
+
+  * HARDWARE CONNECTIONS
+ *  - GPIO 16 ---> VGA Hsync
+ *  - GPIO 17 ---> VGA Vsync
+ *  - GPIO 18 ---> 470 ohm resistor ---> VGA Green
+ *  - GPIO 19 ---> 330 ohm resistor ---> VGA Green
+ *  - GPIO 20 ---> 330 ohm resistor ---> VGA Blue
+ *  - GPIO 21 ---> 330 ohm resistor ---> VGA Red
+ *  - RP2040 GND ---> VGA GND
+ *  - GPIO 8 ---> MPU6050 SDA
+ *  - GPIO 9 ---> MPU6050 SCL
+ *  - 3.3v ---> MPU6050 VCC
+ *  - RP2040 GND ---> MPU6050 GND
  * 
  */
 #include <stdio.h>
@@ -16,6 +29,7 @@
 
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
+#include "mpu6050.h"
 
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
