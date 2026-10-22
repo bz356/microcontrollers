@@ -32,6 +32,24 @@ Entry template:
 
 ## Nat
 
+### 2026-10-22 - lab3 - Implement independent serial commands (Codex)
+- **Asked:** "impelment this use case".
+- **Result:** Updated `protothread_serial` in `pwm-demo.c` to prompt for `d` (PWM duty, 0 through WRAPVAL) or `t` (positive plot interval in PWM interrupts), then read the selected value and return to the command prompt. Added input checks and feedback so invalid commands, nonnumeric values, trailing junk, and out-of-range values do not change settings. Initialized `control` and `old_control` to match the existing 3000 startup duty so the first zero-duty command takes effect. ARM GCC syntax checking passed with an existing duplicate CLKDIV warning. Full CMake configuration remains blocked by existing merge markers at line 38; the PWM_demo target-name typo also remains. Preserved other ongoing firmware edits.
+- **Files touched:** `pwm-demo.c`, `CLAUDE_USAGE.md`.
+- **Commits:** none.
+
+### 2026-10-22 - lab3 - Explain serial command and value reads (Codex)
+- **Asked:** "look at the erial thread whats the difference between the commad serial read".
+- **Result:** Explained that every `serial_read` collects text into the same input buffer; the following `sscanf` determines whether that text is interpreted as an integer duty value, a command character, or an integer plot threshold. The current combined loop requests duty first, then a command, and requests a threshold only for `t`. Identified the missing `static char classifier` declaration and suggested command-based dispatch for independent duty and plot-threshold changes. No firmware edits were made.
+- **Files touched:** `CLAUDE_USAGE.md` only.
+- **Commits:** none.
+
+### 2026-10-22 - lab3 - Recheck combined demo and build configuration (Codex)
+- **Asked:** "can you check again".
+- **Result:** Confirmed the VGA header, combined source list, PIO target, and DMA dependency were added. CMake configuration fails at unresolved merge markers on line 38; its library target also uses `PWM_demo` instead of `PWM_Demo`. The built application is `pwm-demo.c`, which still lacks I2C/IMU/VGA initialization and drawing-thread startup. UART protothreads remain incompatible with the disabled UART initialization, and initial PWM duty still differs from the control variables. Duplicate macro and slice declarations also remain. No firmware or CMake edits were made.
+- **Files touched:** `CLAUDE_USAGE.md` only.
+- **Commits:** none.
+
 ### 2026-10-22 - lab3 - Review combined PWM and IMU demo (Codex)
 - **Asked:** "am i combing imu demo and pwm demo code rght".
 - **Result:** Reviewed the combined code in `pwm-demo.c`. The shared PWM ISR contains both IMU sampling and duty updates, but the program still needs VGA and hardware headers, I2C/IMU/VGA initialization before PWM interrupts start, and a scheduled drawing thread. Identified CMake target wiring and DMA dependency problems, duplicate declarations, a mismatch between initial PWM duty and control variables, and UART-only protothreads with UART stdio disabled. Recommended one application entry point and one combined build target. Firmware was reviewed without edits or a build.

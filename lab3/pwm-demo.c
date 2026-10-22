@@ -136,8 +136,8 @@ void drawAxes() {
 uint slice_num ;
 
 // PWM duty cycle
-volatile int control ;
-volatile int old_control ;
+volatile int control = 3000 ;
+volatile int old_control = 3000 ;
 
 volatile int throttle = 10 ;
 
@@ -226,29 +226,71 @@ static PT_THREAD (protothread_draw(struct pt *pt))
     PT_END(pt) ;
 }
 
-// User input thread
+// User input thread: independently set PWM duty or the plot sample interval.
 static PT_THREAD (protothread_serial(struct pt *pt))
 {
     PT_BEGIN(pt) ;
+    static char classifier ;
     static int test_in ;
+    static char extra_input ;
     while(1) {
-        sprintf(pt_serial_out_buffer, "input a duty cycle (0-6000): ");
+        sprintf(pt_serial_out_buffer, "command (d = duty, t = plot interval): ");
         serial_write ;
-        // spawn a thread to do the non-blocking serial read
         serial_read ;
-        // convert input string to number
-        sscanf(pt_serial_in_buffer,"%d", &test_in) ;
-        if (test_in > 6000) continue ;
-        else if (test_in < 0) continue ;
-        else control = test_in ;
+        if (sscanf(pt_serial_in_buffer, " %c %c", &classifier, &extra_input) != 1) {
+            sprintf(pt_serial_out_buffer, "enter d or t\r\n");
+            serial_write ;
+            continue ;
+        }
+
+        if (classifier == 'd') {
+            sprintf(pt_serial_out_buffer, "input a duty cycle (0-%d): ", WRAPVAL);
+            serial_write ;
+            serial_read ;
+            if (sscanf(pt_serial_in_buffer, "%d %c", &test_in, &extra_input) == 1 &&
+                test_in >= 0 && test_in <= WRAPVAL) {
+                control = test_in ;
+                sprintf(pt_serial_out_buffer, "duty set to %d\r\n", test_in);
+            } else {
+                sprintf(pt_serial_out_buffer, "invalid duty; enter an integer from 0 to %d\r\n", WRAPVAL);
+            }
+            serial_write ;
+        } else if (classifier == 't') {
+            sprintf(pt_serial_out_buffer, "plot interval (PWM interrupts, >0): ");
+            serial_write ;
+            serial_read ;
+            if (sscanf(pt_serial_in_buffer, "%d %c", &test_in, &extra_input) == 1 &&
+                test_in > 0) {
+                threshold = test_in ;
+                sprintf(pt_serial_out_buffer, "plot interval set to %d\r\n", test_in);
+            } else {
+                sprintf(pt_serial_out_buffer, "invalid interval; enter a positive integer\r\n");
+            }
+            serial_write ;
+        } else {
+            sprintf(pt_serial_out_buffer, "unknown command; enter d or t\r\n");
+            serial_write ;
+        }
     }
     PT_END(pt) ;
+}
+
+// Entry point for core 1
+void core1_entry() {
+    gpio_init(15) ;
+    gpio_set_dir(15, GPIO_OUT) ;
+    gpio_put(15, 0) ;
+    pt_add_thread(protothread_draw) ;
+    pt_schedule_start ;
 }
 
 int main() {
 
     // Initialize stdio
     stdio_init_all();
+
+    // Initialize VGA
+    initVGA() ;
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// PWM CONFIGURATION ////////////////////////////
