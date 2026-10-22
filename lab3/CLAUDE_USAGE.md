@@ -32,6 +32,18 @@ Entry template:
 
 ## Nat
 
+### 2026-10-22 - lab3 - Recover unfinished Git merge (Codex)
+- **Asked:** Help with repeated `git pull` and `git stash` failures reporting an unresolved `CLAUDE_USAGE.md` conflict.
+- **Result:** Diagnosed an unfinished merge where the incoming branch deleted the usage log. Selected the complete local log for preservation, including newer entries; the newer `origin/main` commit also restores an older copy of the log. Preserved the staged CMake compile-command export change and prepared to finish the pending merge and integrate that newer remote-tracking commit. Untracked lab2 notes are outside this recovery.
+- **Files touched:** `CLAUDE_USAGE.md`; existing staged `CMakeLists.txt` change retained for the merge.
+- **Commits:** merge recovery.
+
+### 2026-10-22 - lab3 - Recheck build and numeric integration (Codex)
+- **Asked:** "check again".
+- **Result:** CMake configuration now succeeds for the cached Pico 2 target; merge markers, target linkage, UART selection, and the I2C include are corrected. ARM GCC syntax checking reports macro-redefinition warnings but no C errors. Found a fixed-point format mismatch: the IMU driver produces 16-fractional-bit values, while the copied macros in `pwm-demo.c` use 15 fractional bits, doubling plotted readings. Recommended removing that copied macro block and using `mpu6050.h` consistently. RGB PIO still hard-codes delays of 11/12 cycles; the changed pixelhold and vid_freq constants do not affect active instructions, so VGA pixel timing remains incorrect at 150 MHz. Monochrome plot colors, unchecked I2C results, duplicate PWM declarations, and the board default/cache mismatch remain. Actual compiler include paths select RP2350 hardware headers, not host GPIO headers. The full build stalled without output and was interrupted; no link success or hardware validation is claimed. Git reports an unresolved modify/delete conflict for this log. Firmware and CMake were reviewed without edits.
+- **Files touched:** `CLAUDE_USAGE.md` only; generated build files updated by CMake.
+- **Commits:** none.
+
 ### 2026-10-22 - lab3 - Check remaining integration issues (Codex)
 - **Asked:** "check now is there any integration issues".
 - **Result:** Confirmed I2C/IMU initialization, core-1 drawing startup, independent serial commands, and the CMake target spelling are now present. CMake still fails on merge markers at line 38. ARM GCC syntax checking fails because `pwm-demo.c` calls I2C APIs without including `hardware/i2c.h`; it also reports the existing duplicate CLKDIV macro. A final reread confirmed the user's ongoing CMake edit now enables UART and disables USB, matching the UART0 protothreads. RGB PIO takes 16 cycles per pixel, which at the cached Pico 2 default 150 MHz clock is incompatible with the 25 MHz sync timing; the driver also maps every nonzero plot color to white. Noted unchecked I2C read results and ISR timeout budget, plus the `pico` CMake default versus cached `pico2` board setting. Firmware and CMake were reviewed without edits; no hardware validation was performed.

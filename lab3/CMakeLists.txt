@@ -20,6 +20,8 @@ cmake_minimum_required(VERSION 3.13)
 # include the sdk.cmake file
 include(pico_sdk_import.cmake)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # give the project a name (anything you want)
 project(PWM_Demo C CXX ASM)
 
