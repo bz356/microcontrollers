@@ -32,6 +32,12 @@ Entry template:
 
 ## Nat
 
+### 2026-10-22 - lab3 - Check remaining integration issues (Codex)
+- **Asked:** "check now is there any integration issues".
+- **Result:** Confirmed I2C/IMU initialization, core-1 drawing startup, independent serial commands, and the CMake target spelling are now present. CMake still fails on merge markers at line 38. ARM GCC syntax checking fails because `pwm-demo.c` calls I2C APIs without including `hardware/i2c.h`; it also reports the existing duplicate CLKDIV macro. A final reread confirmed the user's ongoing CMake edit now enables UART and disables USB, matching the UART0 protothreads. RGB PIO takes 16 cycles per pixel, which at the cached Pico 2 default 150 MHz clock is incompatible with the 25 MHz sync timing; the driver also maps every nonzero plot color to white. Noted unchecked I2C read results and ISR timeout budget, plus the `pico` CMake default versus cached `pico2` board setting. Firmware and CMake were reviewed without edits; no hardware validation was performed.
+- **Files touched:** `CLAUDE_USAGE.md` only.
+- **Commits:** none.
+
 ### 2026-10-22 - lab3 - Implement independent serial commands (Codex)
 - **Asked:** "impelment this use case".
 - **Result:** Updated `protothread_serial` in `pwm-demo.c` to prompt for `d` (PWM duty, 0 through WRAPVAL) or `t` (positive plot interval in PWM interrupts), then read the selected value and return to the command prompt. Added input checks and feedback so invalid commands, nonnumeric values, trailing junk, and out-of-range values do not change settings. Initialized `control` and `old_control` to match the existing 3000 startup duty so the first zero-duty command takes effect. ARM GCC syntax checking passed with an existing duplicate CLKDIV warning. Full CMake configuration remains blocked by existing merge markers at line 38; the PWM_demo target-name typo also remains. Preserved other ongoing firmware edits.

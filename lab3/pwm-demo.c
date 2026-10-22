@@ -34,6 +34,7 @@
 
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
+#include "hardware/i2c.h"
 
 #include "pt_cornell_rp2040_v1_4.h"
 

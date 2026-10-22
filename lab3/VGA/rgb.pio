@@ -7,8 +7,8 @@
 .program rgb
 ; define the pixel hold times which depend on clock freq
 ; pixelhold should be 2 for 150 MHz in black and white modification
-.define pixelhold 11
-.define PUBLIC vid_freq 400
+.define pixelhold 4
+.define PUBLIC vid_freq 150
 
 ; ISR is loaded with RGB_ACTIVE (639) once from C via pio_sm_exec in initVGA()
 
