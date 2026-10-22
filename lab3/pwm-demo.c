@@ -30,6 +30,7 @@
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "mpu6050.h"
+#include "VGA/vga16_graphics_v3.h"
 
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
