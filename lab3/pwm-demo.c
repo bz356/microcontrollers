@@ -62,6 +62,17 @@
 #define BOTTOM_PLOT_BOTTOM 430
 #define PLOT_WIDTH 530
 
+// === the fixed point macros ========================================
+typedef signed int fix15 ;
+#define multfix15(a,b) ((fix15)((((signed long long)(a))*((signed long long)(b)))>>15))
+#define float2fix15(a) ((fix15)((a)*32768.0f)) // 2^15
+#define fix2float15(a) ((float)(a)/32768.0f)
+#define absfix15(a) abs(a) 
+#define int2fix15(a) ((fix15)(a << 15))
+#define fix2int15(a) ((int)(a >> 15))
+#define char2fix15(a) (fix15)(((fix15)(a)) << 15)
+#define divfix(a,b) (fix15)(div_s64s64( (((signed long long)(a)) << 15), ((signed long long)(b))))
+
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
 
@@ -292,6 +303,16 @@ int main() {
     // Initialize VGA
     initVGA() ;
 
+     ////////////////////////////////////////////////////////////////////////
+    ///////////////////////// I2C CONFIGURATION ////////////////////////////
+    i2c_init(I2C_CHAN, I2C_BAUD_RATE) ;
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C) ;
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C) ;
+
+    // MPU6050 initialization
+    mpu6050_reset();
+    mpu6050_read_raw(acceleration, gyro);
+
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// PWM CONFIGURATION ////////////////////////////
     ////////////////////////////////////////////////////////////////////////
@@ -321,6 +342,14 @@ int main() {
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////////// ROCK AND ROLL ////////////////////////////
     ////////////////////////////////////////////////////////////////////////
+    // start core 1 
+    multicore_reset_core1();
+    multicore_launch_core1(core1_entry);
+
+    // start core 0
+    gpio_init(14) ;
+    gpio_set_dir(14, GPIO_OUT) ;
+    gpio_put(14, 0) ;
     pt_add_thread(protothread_serial) ;
     pt_schedule_start ;
 
