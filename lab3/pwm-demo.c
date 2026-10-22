@@ -35,6 +35,7 @@
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
 #include "hardware/i2c.h"
+#include "hardware/clocks.h"
 
 #include "pt_cornell_rp2040_v1_4.h"
 
@@ -65,6 +66,23 @@
 
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
+
+// Low-pass filtered accelerometer values
+volatile fix15 filtered_ax;
+volatile fix15 filtered_ay;
+
+// Angle estimates
+volatile fix15 accel_angle;
+volatile fix15 gyro_angle_delta;
+volatile fix15 complementary_angle;
+
+#define PI 3.14159265358979323846f
+
+// Filter constants
+const fix15 zeropt001 = float2fix15(0.001f);
+const fix15 zeropt999 = float2fix15(0.999f);
+
+const fix15 oneeightyoverpi = float2fix15(180.0f / PI);
 
 // Arrays for circular display buffer
 fix15 ax[PLOT_WIDTH] ;
@@ -150,6 +168,25 @@ void on_pwm_wrap() {
     // If you want these values in floating point, call fix2float15() on
     // the raw measurements.
     mpu6050_read_raw(acceleration, gyro);
+
+    // Low-pass the accelerometer measurements before atan2
+    filtered_ax = filtered_ax
+                + ((acceleration[0] - filtered_ax) >> 4);
+
+    filtered_ay = filtered_ay
+                + ((acceleration[1] - filtered_ay) >> 4);
+
+    // Accelerometer angle (degrees - 15.16 fixed point) 
+    // Only ONE of the two lines below will be used, depending whether or not a small angle approximation is appropriate
+
+    // NO SMALL ANGLE APPROXIMATION
+    accel_angle = multfix15(float2fix15(atan2(-filtered_ax, filtered_ay) + PI), oneeightyoverpi);
+
+    // Gyro angle delta (measurement times timestep) (15.16 fixed point)
+    gyro_angle_delta = multfix15(gyro[2], zeropt001) ;
+
+    // Complementary angle (degrees - 15.16 fixed point)
+    complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
 
     // Increment drawspeed controller
     throttle += 1 ;
@@ -283,6 +320,7 @@ void core1_entry() {
 }
 
 int main() {
+    set_sys_clock_khz(150000, true);
 
     // Initialize stdio
     stdio_init_all();
@@ -299,6 +337,19 @@ int main() {
     // MPU6050 initialization
     mpu6050_reset();
     mpu6050_read_raw(acceleration, gyro);
+
+    // Initialize accelerometer filters
+    filtered_ax = acceleration[0];
+    filtered_ay = acceleration[1];
+
+    // Get initial absolute angle from accelerometer
+    accel_angle = multfix15(
+        float2fix15(atan2(-filtered_ax, filtered_ay) + PI),
+        oneeightyoverpi
+    );
+
+    // Start complementary filter at accelerometer estimate
+    complementary_angle = accel_angle;
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// PWM CONFIGURATION ////////////////////////////
