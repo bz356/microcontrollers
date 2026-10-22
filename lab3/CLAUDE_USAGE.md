@@ -34,7 +34,7 @@ Entry template:
 
 ### 2026-10-22 - lab3 - Recover unfinished Git merge (Codex)
 - **Asked:** Help with repeated `git pull` and `git stash` failures reporting an unresolved `CLAUDE_USAGE.md` conflict.
-- **Result:** Diagnosed an unfinished merge where the incoming branch deleted the usage log. Selected the complete local log for preservation, including newer entries; the newer `origin/main` commit also restores an older copy of the log. Preserved the staged CMake compile-command export change and prepared to finish the pending merge and integrate that newer remote-tracking commit. Untracked lab2 notes are outside this recovery.
+- **Result:** Finished the pending merge after preserving the complete usage log and the staged CMake compile-command export change. Integrated the newer `origin/main` commit that restores an older copy of the log, retaining all entries when resolving the resulting add/add conflict. Untracked lab2 notes were left unchanged.
 - **Files touched:** `CLAUDE_USAGE.md`; existing staged `CMakeLists.txt` change retained for the merge.
 - **Commits:** merge recovery.
 
