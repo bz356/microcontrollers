@@ -69,7 +69,7 @@ fix15 acceleration[3], gyro[3];
 
 // Low-pass filtered accelerometer values
 volatile fix15 filtered_ax;
-volatile fix15 filtered_ay;
+volatile fix15 filtered_az;
 
 // Angle estimates
 volatile fix15 accel_angle;
@@ -197,7 +197,7 @@ void on_pwm_wrap() {
     // Only ONE of the two lines below will be used, depending whether or not a small angle approximation is appropriate
 
     // NO SMALL ANGLE APPROXIMATION
-    accel_angle = multfix15(float2fix15(atan2(-filtered_ax, filtered_ay) + PI), oneeightyoverpi);
+    accel_angle = multfix15(float2fix15(atan2(-filtered_ax, filtered_az) + PI), oneeightyoverpi);
 
     // Gyro angle delta (measurement times timestep) (15.16 fixed point)
     gyro_angle_delta = multfix15(gyro[2], zeropt001) ;
