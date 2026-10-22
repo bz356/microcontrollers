@@ -20,6 +20,8 @@ cmake_minimum_required(VERSION 3.13)
 # include the sdk.cmake file
 include(pico_sdk_import.cmake)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # give the project a name (anything you want)
 project(PWM_Demo C CXX ASM)
 
@@ -35,12 +37,6 @@ pico_generate_pio_header(PWM_Demo ${CMAKE_CURRENT_LIST_DIR}/VGA/rgb.pio)
 
 # must match with executable name and source file names
 target_sources(PWM_Demo PRIVATE pwm-demo.c VGA/vga16_graphics_v3.c mpu6050.c)
-<<<<<<< Updated upstream
-=======
-#target_sources(MPU6050_IMU PRIVATE imu_demo.c VGA/vga16_graphics_v3.c mpu6050.c)
-
-
->>>>>>> Stashed changes
 
 # Add pico_multicore which is required for multicore functionality
 target_link_libraries(PWM_Demo
