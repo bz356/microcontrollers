@@ -78,11 +78,11 @@ volatile fix15 complementary_angle;
 
 #define PI 3.14159265358979323846f
 
-// Filter constants
-const fix15 zeropt001 = float2fix15(0.001f);
-const fix15 zeropt999 = float2fix15(0.999f);
+// // Filter constants
+// const fix15 zeropt001 = float2fix15(0.001f);
+// const fix15 zeropt999 = float2fix15(0.999f);
 
-const fix15 oneeightyoverpi = float2fix15(180.0f / PI);
+// const fix15 oneeightyoverpi = float2fix15(180.0f / PI);
 
 // Arrays for circular display buffer
 fix15 ax[PLOT_WIDTH] ;
@@ -150,6 +150,23 @@ void drawAxes() {
     writeString(screentext) ;
 }
 
+static void drawFilteredAngle(void) {
+    // Take one snapshot of the value updated by the PWM interrupt on core 0.
+    fix15 angle_snapshot = complementary_angle;
+    // Format one decimal place directly from 15.16 fixed point.
+    int angle_tenths = (int)(((int64_t)angle_snapshot * 10) / int2fix15(1));
+    int magnitude = angle_tenths < 0 ? -angle_tenths : angle_tenths;
+    char angle_text[40];
+
+    snprintf(angle_text, sizeof(angle_text), "Filtered angle: %s%d.%d deg",
+             angle_tenths < 0 ? "-" : "", magnitude / 10, magnitude % 10);
+    setTextSize(2);
+    setTextColor(WHITE);
+    setCursor(LEFT_EDGE, 30);
+    writeString(angle_text);
+    setTextSize(1);
+}
+
 
 // PWM duty cycle
 volatile int control = 3000 ;
@@ -187,7 +204,7 @@ void on_pwm_wrap() {
 
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
-
+    
     // Increment drawspeed controller
     throttle += 1 ;
     // Maintain a circular buffer for display
@@ -227,6 +244,7 @@ static PT_THREAD (protothread_draw(struct pt *pt))
 
     // Draw axes
     drawAxes() ;
+    drawFilteredAngle() ;
     // Copy to other buffer
     copy_buffer_to_other() ;
 
@@ -238,6 +256,7 @@ static PT_THREAD (protothread_draw(struct pt *pt))
         // Clear the buffer, draw the axes
         clearLowFrame(0, BLACK) ;
         drawAxes() ;
+        drawFilteredAngle() ;
 
         // Plot data oldest-->newest
         start = head ;

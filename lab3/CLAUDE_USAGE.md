@@ -32,6 +32,24 @@ Entry template:
 
 ## Nat
 
+### 2026-10-22 - lab3 - Display filtered angle on VGA (Codex)
+- **Asked:** "show on vga the filtered angle".
+- **Result:** Added a live `Filtered angle: ... deg` readout above the existing plots in `pwm-demo.c`, using the existing complementary-filter result. The drawing core snapshots the fixed-point angle and formats one decimal place with integer arithmetic. The readout is drawn into the initial buffers and redrawn after each frame clear, with text size restored afterward. Preserved the existing filter and the user's ongoing edits. ARM GCC syntax checking and diff whitespace checks passed; the physical VGA output was not validated.
+- **Files touched:** `pwm-demo.c`, `CLAUDE_USAGE.md`.
+- **Commits:** none.
+
+### 2026-10-22 - lab3 - Review PWM application excluding VGA driver (Codex)
+- **Asked:** "check the pwm demo is there anything else that is missing, we know the vga driver is a little broken so other than that".
+- **Result:** Reviewed application startup, PWM updates, IMU integration, serial commands, and shared sample buffers without reviewing VGA-driver defects. Found the remaining 15-versus-16 fractional-bit mismatch, unchecked I2C failures with a near-1-ms worst-case timeout budget inside the PWM ISR, and unsynchronized cross-core access to the six sample buffers. Noted duplicate PWM definitions and GPIO14 initialization after PWM has already started. Confirmed IMU initialization precedes PWM startup, UART selection matches the serial helper, duty variables match the initial PWM setting, and the drawing core is launched. Motor duty remains manually commanded; no IMU-to-duty control algorithm is implemented. ARM GCC syntax checks passed for `pwm-demo.c` and `mpu6050.c`, with seven macro-redefinition warnings in the application. No firmware edits or hardware validation were performed.
+- **Files touched:** `CLAUDE_USAGE.md` only.
+- **Commits:** none.
+
+### 2026-10-22 - lab3 - Remove untracked lab2 notes (Codex)
+- **Asked:** Remove `../lab2/reconstructed_development_chat.md` and `../lab2/report_alignment_notes.md`.
+- **Result:** Deleted exactly the two requested untracked files from lab2.
+- **Files touched:** Deleted the two requested files; updated `CLAUDE_USAGE.md`.
+- **Commits:** none.
+
 ### 2026-10-22 - lab3 - Recover unfinished Git merge (Codex)
 - **Asked:** Help with repeated `git pull` and `git stash` failures reporting an unresolved `CLAUDE_USAGE.md` conflict.
 - **Result:** Finished the pending merge after preserving the complete usage log and the staged CMake compile-command export change. Integrated the newer `origin/main` commit that restores an older copy of the log, retaining all entries when resolving the resulting add/add conflict. Untracked lab2 notes were left unchanged.
