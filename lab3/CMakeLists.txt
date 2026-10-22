@@ -23,25 +23,33 @@ include(pico_sdk_import.cmake)
 # give the project a name (anything you want)
 project(PWM_Demo C CXX ASM)
 project(MPU6050_IMU C CXX ASM)
+project(VGA_Animation_Demo C CXX ASM)
 
 # initialize the sdk
 pico_sdk_init()
 
 add_executable(PWM_Demo)
 add_executable(MPU6050_IMU)
+add_executable(VGA_Animation_Demo)
 
 # must match with pio filename and executable name from above
 pico_generate_pio_header(MPU6050_IMU ${CMAKE_CURRENT_LIST_DIR}/VGA/hsync.pio)
 pico_generate_pio_header(MPU6050_IMU ${CMAKE_CURRENT_LIST_DIR}/VGA/vsync.pio)
 pico_generate_pio_header(MPU6050_IMU ${CMAKE_CURRENT_LIST_DIR}/VGA/rgb.pio)
+pico_generate_pio_header(VGA_Animation_Demo ${CMAKE_CURRENT_LIST_DIR}/VGA/hsync.pio)
+pico_generate_pio_header(VGA_Animation_Demo ${CMAKE_CURRENT_LIST_DIR}/VGA/vsync.pio)
+pico_generate_pio_header(VGA_Animation_Demo ${CMAKE_CURRENT_LIST_DIR}/VGA/rgb.pio)
 
 # must match with executable name and source file names
 target_sources(PWM_Demo PRIVATE pwm-demo.c)
 target_sources(MPU6050_IMU PRIVATE imu_demo.c VGA/vga16_graphics_v3.c mpu6050.c)
+target_sources(VGA_Animation_Demo PRIVATE animation.c VGA/vga16_graphics_v3.c)
+
 
 
 # Add pico_multicore which is required for multicore functionality
-target_link_libraries(MPU6050_IMU 
+target_link_libraries(VGA_Animation_Demo
+                    MPU6050_IMU 
                     PWM_Demo 
                     pico_stdlib 
                     pico_multicore 
@@ -53,13 +61,15 @@ target_link_libraries(MPU6050_IMU
                     hardware_i2c 
                     hardware_clocks)
 
+pico_enable_stdio_usb(VGA_Animation_Demo 1)
+pico_enable_stdio_uart(VGA_Animation_Demo 0)
+# must match with executable name
+pico_add_extra_outputs(VGA_Animation_Demo)
+
 # create map/bin/hex file etc.
 pico_add_extra_outputs(PWM_Demo)
-<<<<<<< Updated upstream
 pico_enable_stdio_usb(PWM_Demo 1)
 pico_enable_stdio_uart(PWM_Demo 0)
 pico_add_extra_outputs(MPU6050_IMU)
-=======
-pico_enable_stdio_usb(PWM_Demo 0)
-pico_enable_stdio_uart(PWM_Demo 1)
->>>>>>> Stashed changes
+
+target_compile_definitions(VGA_Animation_Demo PRIVATE PICO_FLASH_SPI_CLKDIV=8)
