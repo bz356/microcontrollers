@@ -174,6 +174,16 @@ volatile int old_control = 3000 ;
 
 volatile int throttle = 10 ;
 
+float kp = 0.5; 
+float ki = 0.5;
+float kd = 0.5;
+float doPid(float requested_angle, float current_angle) {
+    float error = current_angle - requested_angle;
+    return error*kp;
+}
+
+
+
 // PWM interrupt service routine
 void on_pwm_wrap() {
     // Clear the interrupt flag that brought us here
@@ -204,7 +214,7 @@ void on_pwm_wrap() {
 
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
-    
+    // doPid(complemntary_angle, requested_angle);
     // Increment drawspeed controller
     throttle += 1 ;
     // Maintain a circular buffer for display
@@ -288,7 +298,7 @@ static PT_THREAD (protothread_serial(struct pt *pt))
     static int test_in ;
     static char extra_input ;
     while(1) {
-        sprintf(pt_serial_out_buffer, "command (d = duty, t = plot interval): ");
+        sprintf(pt_serial_out_buffer, "command (d = duty, t = plot interval, a = requested angle): ");
         serial_write ;
         serial_read ;
         if (sscanf(pt_serial_in_buffer, " %c %c", &classifier, &extra_input) != 1) {

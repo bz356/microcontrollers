@@ -32,6 +32,12 @@ Entry template:
 
 ## Nat
 
+### 2026-10-22 - lab3 - Revert attempted IMU dropout changes (Codex)
+- **Asked:** Reported that IMU readings freeze or go wrong while VGA keeps refreshing, then requested "please revert those changes".
+- **Result:** Reverted the interrupted dropout fix, restoring the original IMU driver, header, PWM-interrupt acquisition, filter timing, and startup sequence. Preserved the user's PID stub, requested-angle command prompt, and commented PID call, as well as the earlier filtered-angle display. Verified that the only remaining firmware diff is the user's pre-existing edits.
+- **Files touched:** Restored `pwm-demo.c`, `mpu6050.c`, and `mpu6050.h`; updated `CLAUDE_USAGE.md`.
+- **Commits:** none.
+
 ### 2026-10-22 - lab3 - Display filtered angle on VGA (Codex)
 - **Asked:** "show on vga the filtered angle".
 - **Result:** Added a live `Filtered angle: ... deg` readout above the existing plots in `pwm-demo.c`, using the existing complementary-filter result. The drawing core snapshots the fixed-point angle and formats one decimal place with integer arithmetic. The readout is drawn into the initial buffers and redrawn after each frame clear, with text size restored afterward. Preserved the existing filter and the user's ongoing edits. ARM GCC syntax checking and diff whitespace checks passed; the physical VGA output was not validated.
