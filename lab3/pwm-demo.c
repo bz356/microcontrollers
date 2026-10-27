@@ -36,6 +36,7 @@
 #include "hardware/irq.h"
 #include "hardware/i2c.h"
 #include "hardware/clocks.h"
+#include "hardware/sync.h"
 
 #include "pt_cornell_rp2040_v1_4.h"
 
@@ -75,6 +76,8 @@ volatile fix15 filtered_az;
 volatile fix15 accel_angle;
 volatile fix15 gyro_angle_delta;
 volatile fix15 complementary_angle;
+// Degrees in the same 0..360 convention as the accelerometer angle.
+volatile float requested_angle = 90;
 
 #define PI 3.14159265358979323846f
 
@@ -174,15 +177,32 @@ volatile int old_control = 3000 ;
 
 volatile int throttle = 10 ;
 
-float kp = 0.5; 
-float ki = 0.5;
-float kd = 0.5;
-float doPid(float requested_angle, float current_angle) {
-    float error = current_angle - requested_angle;
-    return error*kp;
+// P only: no accumulated error (I) or error-rate (D) term.
+float kp = 0.5f;
+float doPid(float target_angle, float current_angle) {
+    float error = target_angle - current_angle;
+    return error * kp;
 }
 
+// Command replies and telemetry share UART0, but use separate text buffers.
+// Both writers run cooperatively on core 0; never hold this across serial_read.
+static bool serial_tx_busy;
+static struct pt pt_locked_serialout;
+static PT_THREAD(protothread_locked_serialout(struct pt *pt)) {
+    PT_BEGIN(pt);
+    PT_YIELD_UNTIL(pt, !serial_tx_busy);
+    serial_tx_busy = true;
+    serial_write;
+    serial_tx_busy = false;
+    PT_END(pt);
+}
 
+#define serial_write_locked do { \
+    PT_SPAWN(pt, &pt_locked_serialout, \
+             protothread_locked_serialout(&pt_locked_serialout)); \
+} while (0)
+
+#define STATUS_INTERVAL_US 5000000ULL
 
 // PWM interrupt service routine
 void on_pwm_wrap() {
@@ -214,7 +234,22 @@ void on_pwm_wrap() {
 
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
-    // doPid(complemntary_angle, requested_angle);
+
+    // Future P control: doPid(requested_angle, fix2float15(complementary_angle));
+    /* ========================== P Control +++++++++++++++++++*/
+    float correction = doPid(
+    requested_angle,
+    fix2float15(complementary_angle)
+    );
+
+    // Replace 3000 with the PWM level that holds your desired position.
+    float pwm_command = 3000.0f + correction;
+
+    // Keep the command within the valid PWM range.
+    pwm_command = fminf((float)WRAPVAL, fmaxf(0.0f, pwm_command));
+    control = (int)lroundf(pwm_command);
+    /*========== P Control End ++++++++++++++++++++++++++++++*/
+    
     // Increment drawspeed controller
     throttle += 1 ;
     // Maintain a circular buffer for display
@@ -290,26 +325,27 @@ static PT_THREAD (protothread_draw(struct pt *pt))
     PT_END(pt) ;
 }
 
-// User input thread: independently set PWM duty or the plot sample interval.
+// User input thread: independently set duty, plot interval, or requested angle.
 static PT_THREAD (protothread_serial(struct pt *pt))
 {
     PT_BEGIN(pt) ;
     static char classifier ;
     static int test_in ;
     static char extra_input ;
+    static float angle_in ;
     while(1) {
         sprintf(pt_serial_out_buffer, "command (d = duty, t = plot interval, a = requested angle): ");
-        serial_write ;
+        serial_write_locked ;
         serial_read ;
         if (sscanf(pt_serial_in_buffer, " %c %c", &classifier, &extra_input) != 1) {
-            sprintf(pt_serial_out_buffer, "enter d or t\r\n");
-            serial_write ;
+            sprintf(pt_serial_out_buffer, "enter d, t, or a\r\n");
+            serial_write_locked ;
             continue ;
         }
 
         if (classifier == 'd') {
             sprintf(pt_serial_out_buffer, "input a duty cycle (0-%d): ", WRAPVAL);
-            serial_write ;
+            serial_write_locked ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer, "%d %c", &test_in, &extra_input) == 1 &&
                 test_in >= 0 && test_in <= WRAPVAL) {
@@ -318,10 +354,10 @@ static PT_THREAD (protothread_serial(struct pt *pt))
             } else {
                 sprintf(pt_serial_out_buffer, "invalid duty; enter an integer from 0 to %d\r\n", WRAPVAL);
             }
-            serial_write ;
+            serial_write_locked ;
         } else if (classifier == 't') {
             sprintf(pt_serial_out_buffer, "plot interval (PWM interrupts, >0): ");
-            serial_write ;
+            serial_write_locked ;
             serial_read ;
             if (sscanf(pt_serial_in_buffer, "%d %c", &test_in, &extra_input) == 1 &&
                 test_in > 0) {
@@ -330,13 +366,66 @@ static PT_THREAD (protothread_serial(struct pt *pt))
             } else {
                 sprintf(pt_serial_out_buffer, "invalid interval; enter a positive integer\r\n");
             }
-            serial_write ;
+            serial_write_locked ;
+        } else if (classifier == 'a') {
+            sprintf(pt_serial_out_buffer, "requested angle (0-360 degrees): ");
+            serial_write_locked ;
+            serial_read ;
+            if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
+                isfinite(angle_in) && angle_in >= 0.0f && angle_in <= 360.0f) {
+                requested_angle = angle_in;
+                snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
+                         "requested angle set to %.1f deg\r\n", (double)angle_in);
+            } else {
+                sprintf(pt_serial_out_buffer, "invalid angle; enter a number from 0 to 360\r\n");
+            }
+            serial_write_locked ;
         } else {
-            sprintf(pt_serial_out_buffer, "unknown command; enter d or t\r\n");
-            serial_write ;
+            sprintf(pt_serial_out_buffer, "unknown command; enter d, t, or a\r\n");
+            serial_write_locked ;
         }
     }
     PT_END(pt) ;
+}
+
+// Independent of command input, so status still prints while serial_read waits.
+static PT_THREAD(protothread_status(struct pt *pt)) {
+    PT_BEGIN(pt);
+    static uint64_t next_status_us;
+    static char status_text[160];
+    static unsigned send_index;
+    static fix15 filtered_snapshot;
+    static float requested_snapshot;
+    static int duty_snapshot;
+    static uint32_t irq_state;
+    next_status_us = time_us_64() + STATUS_INTERVAL_US;
+
+    while (1) {
+        PT_YIELD_UNTIL(pt, time_us_64() >= next_status_us);
+        // Only the snapshots need interrupts disabled, not formatting or UART I/O.
+        irq_state = save_and_disable_interrupts();
+        filtered_snapshot = complementary_angle;
+        requested_snapshot = requested_angle;
+        duty_snapshot = old_control; // Last value actually applied by the PWM ISR.
+        restore_interrupts(irq_state);
+        snprintf(status_text, sizeof(status_text),
+                 "\r\nfiltered=%.1f deg  requested=%.1f deg  duty=%d/%d\r\n",
+                 (double)fix2float15(filtered_snapshot), (double)requested_snapshot,
+                 duty_snapshot, WRAPVAL);
+
+        PT_YIELD_UNTIL(pt, !serial_tx_busy);
+        serial_tx_busy = true;
+        for (send_index = 0; status_text[send_index] != '\0'; ++send_index) {
+            PT_YIELD_UNTIL(pt, uart_is_writable(UART_ID));
+            uart_putc(UART_ID, status_text[send_index]);
+        }
+        serial_tx_busy = false;
+        next_status_us += STATUS_INTERVAL_US;
+        if (next_status_us <= time_us_64()) {
+            next_status_us = time_us_64() + STATUS_INTERVAL_US;
+        }
+    }
+    PT_END(pt);
 }
 
 // Entry point for core 1
@@ -379,6 +468,7 @@ int main() {
 
     // Start complementary filter at accelerometer estimate
     complementary_angle = accel_angle;
+    requested_angle = fix2float15(complementary_angle);
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// PWM CONFIGURATION ////////////////////////////
@@ -418,6 +508,7 @@ int main() {
     gpio_set_dir(14, GPIO_OUT) ;
     gpio_put(14, 0) ;
     pt_add_thread(protothread_serial) ;
+    pt_add_thread(protothread_status);
     pt_schedule_start ;
 
 }

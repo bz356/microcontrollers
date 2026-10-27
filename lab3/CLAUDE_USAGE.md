@@ -32,6 +32,12 @@ Entry template:
 
 ## Nat
 
+### 2026-10-22 - lab3 - Requested-angle command and five-second status (Codex)
+- **Asked:** Add a requested-angle command and print filtered angle, requested angle, and current duty every five seconds; keep `doPid` P-only. Clarified that the target should be stored and reported without activating automatic motor control.
+- **Result:** Added `a` followed by a finite angle from 0 through 360 degrees, accepting decimal values and rejecting invalid input. The target defaults to the initial filtered angle. Added an independent, nonblocking UART status thread with its own buffer and serialized command/status output; it snapshots the filtered angle, target, and last applied PWM duty before formatting. Updated `doPid` to `kp * (target - current)` with kp=0.5 and removed unused I/D gains. Manual duty control remains active. ARM GCC syntax checking passed. Host checks of the actual command/status functions passed for angle validation, independent duty/interval commands, five-second reporting while waiting for input, overlapping command/status output, applied-duty reporting, and P-only behavior. Host check artifacts are in the ignored build directory; hardware timing/output was not validated.
+- **Files touched:** `pwm-demo.c`, `CLAUDE_USAGE.md`.
+- **Commits:** none.
+
 ### 2026-10-22 - lab3 - Revert attempted IMU dropout changes (Codex)
 - **Asked:** Reported that IMU readings freeze or go wrong while VGA keeps refreshing, then requested "please revert those changes".
 - **Result:** Reverted the interrupted dropout fix, restoring the original IMU driver, header, PWM-interrupt acquisition, filter timing, and startup sequence. Preserved the user's PID stub, requested-angle command prompt, and commented PID call, as well as the earlier filtered-angle display. Verified that the only remaining firmware diff is the user's pre-existing edits.
