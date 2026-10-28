@@ -1,43 +1,45 @@
-/**
- * V. Hunter Adams (vha3@cornell.edu)
- * PWM demo code with serial input
- * 
- * This demonstration sets a PWM duty cycle to a
- * user-specified value.
- * 
+/*
+ * Lab 3: beam angle control
+ * Based on PWM and IMU demo code by V. Hunter Adams (vha3@cornell.edu)
+ *
+ * The 1 kHz PWM interrupt reads the MPU6050, estimates the beam angle with a
+ * complementary filter, and sets the motor PWM duty with P control.
+ * The VGA shows the beam angle and the low-passed motor command. Serial
+ * commands over UART0 set the requested angle and the PID gains.
+ *
  * HARDWARE CONNECTIONS
- *   - GPIO 4 ---> PWM output
-
-  * HARDWARE CONNECTIONS
+ *  - GPIO 4 ---> PWM output
+ *  - GPIO 0 ---> UART0 TX (to USB-serial adapter RX)
+ *  - GPIO 1 ---> UART0 RX (to USB-serial adapter TX)
+ *  - GPIO 14 ---> scope (toggles every PWM interrupt)
+ *  - GPIO 15 ---> scope (toggles every VGA frame)
  *  - GPIO 16 ---> VGA Hsync
  *  - GPIO 17 ---> VGA Vsync
  *  - GPIO 18 ---> 470 ohm resistor ---> VGA Green
  *  - GPIO 19 ---> 330 ohm resistor ---> VGA Green
  *  - GPIO 20 ---> 330 ohm resistor ---> VGA Blue
  *  - GPIO 21 ---> 330 ohm resistor ---> VGA Red
- *  - RP2040 GND ---> VGA GND
+ *  - Pico 2 GND ---> VGA GND
  *  - GPIO 8 ---> MPU6050 SDA
  *  - GPIO 9 ---> MPU6050 SCL
  *  - 3.3v ---> MPU6050 VCC
- *  - RP2040 GND ---> MPU6050 GND
+ *  - Pico 2 GND ---> MPU6050 GND
  * 
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "mpu6050.h"
 #include "VGA/vga16_graphics_v3.h"
-
 #include "hardware/pwm.h"
 #include "hardware/irq.h"
 #include "hardware/i2c.h"
 #include "hardware/clocks.h"
 #include "hardware/sync.h"
-
 #include "pt_cornell_rp2040_v1_4.h"
 
 // PWM wrap value and clock divide value
@@ -49,16 +51,15 @@
 // GPIO we're using for PWM
 #define PWM_OUT 4
 
-
 // We will start drawing at column 81
 #define LEFT_EDGE 81 
 
-// Rescale the measurements for display
-#define OLD_RANGE 500.  // (+/- 250)
-#define NEW_RANGE 150.  // (looks nice on VGA)
-#define OLD_MIN -250. 
-#define OLD_MAX 250. 
-#define ACCEL_SCALE 120.0
+// Plot height in pixels and the value range each plot covers
+#define PLOT_HEIGHT 150
+#define ANGLE_MIN 0.0f
+#define ANGLE_MAX 360.0f
+#define CONTROL_MIN 0.0f
+#define CONTROL_MAX ((float)WRAPVAL)
 
 // Place the plots
 #define TOP_PLOT_BOTTOM 230
@@ -79,106 +80,127 @@ volatile fix15 complementary_angle;
 // Degrees in the same 0..360 convention as the accelerometer angle.
 volatile float requested_angle = 90;
 
+// PID gains, set from the serial console. Only kp is used so far; ki and kd
+// are stored for the future I and D terms.
+volatile float kp = 0.5f;
+volatile float ki = 0.0f;
+volatile float kd = 0.0f;
+
 #define PI 3.14159265358979323846f
 
-// // Filter constants
-// const fix15 zeropt001 = float2fix15(0.001f);
-// const fix15 zeropt999 = float2fix15(0.999f);
-
-// const fix15 oneeightyoverpi = float2fix15(180.0f / PI);
+// Low-passed motor command, display only (the motor gets the raw control value)
+volatile fix15 filtered_control = int2fix15(3000);
 
 // Arrays for circular display buffer
-fix15 ax[PLOT_WIDTH] ;
-fix15 ay[PLOT_WIDTH] ;
-fix15 az[PLOT_WIDTH] ;
-fix15 gx[PLOT_WIDTH] ;
-fix15 gy[PLOT_WIDTH] ;
-fix15 gz[PLOT_WIDTH] ;
+fix15 angle_plot[PLOT_WIDTH];      // measured beam angle (deg)
+float target_plot[PLOT_WIDTH];     // requested beam angle (deg)
+fix15 control_plot[PLOT_WIDTH];    // low-passed motor command (0..WRAPVAL)
 
 // Pointer to head of buffer
-volatile int head = 0 ;
+volatile int head = 0;
 
 // character array
 char screentext[40];
 
-// draw speed
-volatile int threshold = 10 ;
+// draw speed: one plot sample every PLOT_INTERVAL PWM interrupts (1 ms each),
+// so the 530-sample plot spans 530 * 10 ms = 5.3 s
+#define PLOT_INTERVAL 10
 
 // Some macros for max/min/abs
-#define min(a,b) ((a<b) ? a:b)
-#define max(a,b) ((a<b) ? b:a)
-#define abs(a) ((a>0) ? a:-a)
+#define min(a,b) (((a)<(b)) ? (a):(b))
+#define max(a,b) (((a)<(b)) ? (b):(a))
+#define abs(a) (((a)>0) ? (a):-(a))
 
-// semaphore
-static struct pt_sem vga_semaphore ;
+// Some parameters for PWM
 
-// Some paramters for PWM
-
-uint slice_num ;
-
+uint slice_num;
 
 void drawAxes() {
     // Draw the static aspects of the display
-    setTextSize(1) ;
+    setTextSize(1);
     setTextColor(WHITE);
 
-    // Draw bottom plot
-    drawHLine(75, 430, 5, CYAN) ;
-    drawHLine(75, 355, 5, CYAN) ;
-    drawHLine(75, 280, 5, CYAN) ;
-    drawVLine(80, 280, 150, CYAN) ;
-    sprintf(screentext, "0") ;
-    setCursor(50, 350) ;
-    writeString(screentext) ;
-    sprintf(screentext, "+2") ;
-    setCursor(50, 280) ;
-    writeString(screentext) ;
-    sprintf(screentext, "-2") ;
-    setCursor(50, 425) ;
-    writeString(screentext) ;
+    // Draw bottom plot: low-passed motor command
+    drawHLine(75, 430, 5, CYAN);
+    drawHLine(75, 355, 5, CYAN);
+    drawHLine(75, 280, 5, CYAN);
+    drawVLine(80, 280, 150, CYAN);
+    sprintf(screentext, "Motor command (low-passed, 0-%d)", WRAPVAL);
+    setCursor(LEFT_EDGE, 268);
+    writeString(screentext);
+    sprintf(screentext, "%d", WRAPVAL / 2);
+    setCursor(45, 350);
+    writeString(screentext);
+    sprintf(screentext, "%d", WRAPVAL);
+    setCursor(45, 280);
+    writeString(screentext);
+    sprintf(screentext, "0");
+    setCursor(50, 425);
+    writeString(screentext);
 
-    // Draw top plot
-    drawHLine(75, 230, 5, CYAN) ;
-    drawHLine(75, 155, 5, CYAN) ;
-    drawHLine(75, 80, 5, CYAN) ;
-    drawVLine(80, 80, 150, CYAN) ;
-    sprintf(screentext, "0") ;
-    setCursor(50, 150) ;
-    writeString(screentext) ;
-    sprintf(screentext, "+250") ;
-    setCursor(45, 75) ;
-    writeString(screentext) ;
-    sprintf(screentext, "-250") ;
-    setCursor(45, 225) ;
-    writeString(screentext) ;
+    // Draw top plot: beam angle
+    drawHLine(75, 230, 5, CYAN);
+    drawHLine(75, 155, 5, CYAN);
+    drawHLine(75, 80, 5, CYAN);
+    drawVLine(80, 80, 150, CYAN);
+    setCursor(LEFT_EDGE, 68);
+    setTextColor(WHITE);
+    writeString("Beam angle (deg): measured");
+    setTextColor(RED);
+    writeString("  target");
+    setTextColor(WHITE);
+    sprintf(screentext, "180");
+    setCursor(50, 150);
+    writeString(screentext);
+    sprintf(screentext, "360");
+    setCursor(50, 75);
+    writeString(screentext);
+    sprintf(screentext, "0");
+    setCursor(50, 225);
+    writeString(screentext);
 }
 
-static void drawFilteredAngle(void) {
-    // Take one snapshot of the value updated by the PWM interrupt on core 0.
-    fix15 angle_snapshot = complementary_angle;
-    // Format one decimal place directly from 15.16 fixed point.
-    int angle_tenths = (int)(((int64_t)angle_snapshot * 10) / int2fix15(1));
-    int magnitude = angle_tenths < 0 ? -angle_tenths : angle_tenths;
-    char angle_text[40];
+// Map a value in [min_v, max_v] to a pixel row in a plot, clamped so
+// out-of-range values stay on the plot edge instead of drawing elsewhere.
+static int plotY(int plot_bottom, float value, float min_v, float max_v) {
+    float frac = (value - min_v) / (max_v - min_v);
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    return plot_bottom - (int)(PLOT_HEIGHT * frac);
+}
 
-    snprintf(angle_text, sizeof(angle_text), "Filtered angle: %s%d.%d deg",
-             angle_tenths < 0 ? "-" : "", magnitude / 10, magnitude % 10);
+static void drawStatusText(void) {
+    // Take one snapshot of each value updated by the PWM interrupt on core 0.
+    float angle_snapshot = fix2float15(complementary_angle);
+    float target_snapshot = requested_angle;
+    float command_snapshot = fix2float15(filtered_control);
+    char status_text[60];
+
     setTextSize(2);
     setTextColor(WHITE);
-    setCursor(LEFT_EDGE, 30);
-    writeString(angle_text);
+    snprintf(status_text, sizeof(status_text), "Actual: %.1f deg  Target: %.1f deg",
+             (double)angle_snapshot, (double)target_snapshot);
+    setCursor(LEFT_EDGE, 4);
+    writeString(status_text);
+    snprintf(status_text, sizeof(status_text), "Command: %d/%d (%.1f%% duty)",
+             (int)lroundf(command_snapshot), WRAPVAL,
+             (double)(command_snapshot * 100.0f / WRAPVAL));
+    setCursor(LEFT_EDGE, 24);
+    writeString(status_text);
+    snprintf(status_text, sizeof(status_text), "Kp: %.2f  Ki: %.2f  Kd: %.2f",
+             (double)kp, (double)ki, (double)kd);
+    setCursor(LEFT_EDGE, 44);
+    writeString(status_text);
     setTextSize(1);
 }
 
-
 // PWM duty cycle
-volatile int control = 3000 ;
-volatile int old_control = 3000 ;
+volatile int control = 3000;
+volatile int old_control = 3000;
 
-volatile int throttle = 10 ;
+volatile int throttle = 10;
 
 // P only: no accumulated error (I) or error-rate (D) term.
-float kp = 0.5f;
 float doPid(float target_angle, float current_angle) {
     float error = target_angle - current_angle;
     return error * kp;
@@ -208,7 +230,7 @@ static PT_THREAD(protothread_locked_serialout(struct pt *pt)) {
 void on_pwm_wrap() {
     // Clear the interrupt flag that brought us here
     pwm_clear_irq(pwm_gpio_to_slice_num(PWM_OUT));
-    gpio_put(14, !gpio_get(14)) ;
+    gpio_put(14, !gpio_get(14));
 
     // Read the IMU
     // NOTE! This is in 15.16 fixed point. Accel in g's, gyro in deg/s
@@ -223,19 +245,15 @@ void on_pwm_wrap() {
     filtered_az = filtered_az
                 + ((acceleration[2] - filtered_az) >> 4);
 
-    // Accelerometer angle (degrees - 15.16 fixed point) 
-    // Only ONE of the two lines below will be used, depending whether or not a small angle approximation is appropriate
-
-    // NO SMALL ANGLE APPROXIMATION
+    // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
     accel_angle = multfix15(float2fix15(atan2(-filtered_ax, filtered_az) + PI), oneeightyoverpi);
 
     // Gyro angle delta (measurement times timestep) (15.16 fixed point)
-    gyro_angle_delta = multfix15(gyro[2], zeropt001) ;
+    gyro_angle_delta = multfix15(gyro[2], zeropt001);
 
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
 
-    // Future P control: doPid(requested_angle, fix2float15(complementary_angle));
     /* ========================== P Control +++++++++++++++++++*/
     float correction = doPid(
     requested_angle,
@@ -249,128 +267,111 @@ void on_pwm_wrap() {
     pwm_command = fminf((float)WRAPVAL, fmaxf(0.0f, pwm_command));
     control = (int)lroundf(pwm_command);
     /*========== P Control End ++++++++++++++++++++++++++++++*/
+
+    // Low-pass the motor command for display, same 1/16 filter as the accel
+    filtered_control = filtered_control
+                     + ((int2fix15(control) - filtered_control) >> 4);
     
     // Increment drawspeed controller
-    throttle += 1 ;
+    throttle += 1;
     // Maintain a circular buffer for display
-    if ((throttle >= threshold)) { 
+    if ((throttle >= PLOT_INTERVAL)) {
         // Zero drawspeed controller
-        throttle = 0 ;
+        throttle = 0;
 
-        // Replace oldest data in accel arrays with new sample
-        ax[head] = acceleration[0] ;
-        ay[head] = acceleration[1] ;
-        az[head] = acceleration[2] ;
-
-        // Replace oldest data in gyro arrays with new sample
-        gx[head] = gyro[0] ;
-        gy[head] = gyro[1] ;
-        gz[head] = gyro[2] ;
+        // Replace oldest data with new sample
+        angle_plot[head] = complementary_angle;
+        target_plot[head] = requested_angle;
+        control_plot[head] = filtered_control;
 
         // Move the pointer to the oldest data
-        head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1) ;
+        head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1);
 
     }
     // Motor Code 
     // Update duty cycle
     if (control!=old_control) {
-        old_control = control ;
+        old_control = control;
         pwm_set_chan_level(slice_num, PWM_CHAN_A, control);
     }
-    // printf("Current control level: %d\n", control);
 }
 
-static PT_THREAD (protothread_draw(struct pt *pt))
-{
-    PT_BEGIN(pt) ;
+static PT_THREAD (protothread_draw(struct pt *pt)) {
+    PT_BEGIN(pt);
 
-    static int start ;
-    static int i ;
+    static int start;
+    static int i;
 
     // Draw axes
-    drawAxes() ;
-    drawFilteredAngle() ;
+    drawAxes();
+    drawStatusText();
     // Copy to other buffer
-    copy_buffer_to_other() ;
+    copy_buffer_to_other();
 
     while(1) {
         // Wait for a buffer swap
-        PT_YIELD_UNTIL(pt, draw_start_signal()) ;
-        gpio_put(15, !gpio_get(15)) ;
+        PT_YIELD_UNTIL(pt, draw_start_signal());
+        gpio_put(15, !gpio_get(15));
         
         // Clear the buffer, draw the axes
-        clearLowFrame(0, BLACK) ;
-        drawAxes() ;
-        drawFilteredAngle() ;
+        clearLowFrame(0, BLACK);
+        drawAxes();
+        drawStatusText();
 
         // Plot data oldest-->newest
-        start = head ;
+        start = head;
         for (i = 0; i < PLOT_WIDTH; i++) {
-            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(ax[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), WHITE) ;
-            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(ay[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), RED) ;
-            drawPixel(LEFT_EDGE + i, (BOTTOM_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(az[start])*ACCEL_SCALE)-OLD_MIN)/OLD_RANGE))), GREEN) ;
-            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(gx[start]))-OLD_MIN)/OLD_RANGE))), WHITE) ;
-            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(gy[start]))-OLD_MIN)/OLD_RANGE))), RED) ;
-            drawPixel(LEFT_EDGE + i, (TOP_PLOT_BOTTOM -
-                (int)(NEW_RANGE*((float)((fix2float15(gz[start]))-OLD_MIN)/OLD_RANGE))), GREEN) ;
-            start = ((start+1)==PLOT_WIDTH) ? 0 : (start+1) ;
+            // Target first so the measured trace draws on top where they overlap
+            drawPixel(LEFT_EDGE + i, plotY(TOP_PLOT_BOTTOM,
+                target_plot[start], ANGLE_MIN, ANGLE_MAX), RED);
+            drawPixel(LEFT_EDGE + i, plotY(TOP_PLOT_BOTTOM,
+                fix2float15(angle_plot[start]), ANGLE_MIN, ANGLE_MAX), WHITE);
+            drawPixel(LEFT_EDGE + i, plotY(BOTTOM_PLOT_BOTTOM,
+                fix2float15(control_plot[start]), CONTROL_MIN, CONTROL_MAX), GREEN);
+            start = ((start+1)==PLOT_WIDTH) ? 0 : (start+1);
         }
     }
-
-    PT_END(pt) ;
+    PT_END(pt);
 }
 
-// User input thread: independently set duty, plot interval, or requested angle.
-static PT_THREAD (protothread_serial(struct pt *pt))
-{
-    PT_BEGIN(pt) ;
-    static char classifier ;
-    static int test_in ;
-    static char extra_input ;
-    static float angle_in ;
+// User input thread: independently set requested angle or PID gains.
+static PT_THREAD (protothread_serial(struct pt *pt)) {
+    PT_BEGIN(pt);
+    static char classifier;
+    static char extra_input;
+    static float angle_in;
+    static float gain_in;
+    static volatile float *gain;
     while(1) {
-        sprintf(pt_serial_out_buffer, "command (d = duty, t = plot interval, a = requested angle): ");
-        serial_write_locked ;
-        serial_read ;
+        sprintf(pt_serial_out_buffer,
+                "command (a = requested angle, p = Kp, i = Ki, d = Kd): ");
+        serial_write_locked;
+        serial_read;
         if (sscanf(pt_serial_in_buffer, " %c %c", &classifier, &extra_input) != 1) {
-            sprintf(pt_serial_out_buffer, "enter d, t, or a\r\n");
-            serial_write_locked ;
-            continue ;
+            sprintf(pt_serial_out_buffer, "enter a, p, i, or d\r\n");
+            serial_write_locked;
+            continue;
         }
 
-        if (classifier == 'd') {
-            sprintf(pt_serial_out_buffer, "input a duty cycle (0-%d): ", WRAPVAL);
-            serial_write_locked ;
-            serial_read ;
-            if (sscanf(pt_serial_in_buffer, "%d %c", &test_in, &extra_input) == 1 &&
-                test_in >= 0 && test_in <= WRAPVAL) {
-                control = test_in ;
-                sprintf(pt_serial_out_buffer, "duty set to %d\r\n", test_in);
+        if (classifier == 'p' || classifier == 'i' || classifier == 'd') {
+            gain = (classifier == 'p') ? &kp : (classifier == 'i') ? &ki : &kd;
+            snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
+                     "K%c (>= 0, currently %.3f): ", classifier, (double)*gain);
+            serial_write_locked;
+            serial_read;
+            if (sscanf(pt_serial_in_buffer, "%f %c", &gain_in, &extra_input) == 1 &&
+                isfinite(gain_in) && gain_in >= 0.0f) {
+                *gain = gain_in;
+                snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
+                         "K%c set to %.3f\r\n", classifier, (double)gain_in);
             } else {
-                sprintf(pt_serial_out_buffer, "invalid duty; enter an integer from 0 to %d\r\n", WRAPVAL);
+                sprintf(pt_serial_out_buffer, "invalid gain; enter a number >= 0\r\n");
             }
-            serial_write_locked ;
-        } else if (classifier == 't') {
-            sprintf(pt_serial_out_buffer, "plot interval (PWM interrupts, >0): ");
-            serial_write_locked ;
-            serial_read ;
-            if (sscanf(pt_serial_in_buffer, "%d %c", &test_in, &extra_input) == 1 &&
-                test_in > 0) {
-                threshold = test_in ;
-                sprintf(pt_serial_out_buffer, "plot interval set to %d\r\n", test_in);
-            } else {
-                sprintf(pt_serial_out_buffer, "invalid interval; enter a positive integer\r\n");
-            }
-            serial_write_locked ;
+            serial_write_locked;
         } else if (classifier == 'a') {
             sprintf(pt_serial_out_buffer, "requested angle (0-360 degrees): ");
-            serial_write_locked ;
-            serial_read ;
+            serial_write_locked;
+            serial_read;
             if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
                 isfinite(angle_in) && angle_in >= 0.0f && angle_in <= 360.0f) {
                 requested_angle = angle_in;
@@ -379,13 +380,13 @@ static PT_THREAD (protothread_serial(struct pt *pt))
             } else {
                 sprintf(pt_serial_out_buffer, "invalid angle; enter a number from 0 to 360\r\n");
             }
-            serial_write_locked ;
+            serial_write_locked;
         } else {
-            sprintf(pt_serial_out_buffer, "unknown command; enter d, t, or a\r\n");
-            serial_write_locked ;
+            sprintf(pt_serial_out_buffer, "unknown command; enter a, p, i, or d\r\n");
+            serial_write_locked;
         }
     }
-    PT_END(pt) ;
+    PT_END(pt);
 }
 
 // Independent of command input, so status still prints while serial_read waits.
@@ -430,11 +431,11 @@ static PT_THREAD(protothread_status(struct pt *pt)) {
 
 // Entry point for core 1
 void core1_entry() {
-    gpio_init(15) ;
-    gpio_set_dir(15, GPIO_OUT) ;
-    gpio_put(15, 0) ;
-    pt_add_thread(protothread_draw) ;
-    pt_schedule_start ;
+    gpio_init(15);
+    gpio_set_dir(15, GPIO_OUT);
+    gpio_put(15, 0);
+    pt_add_thread(protothread_draw);
+    pt_schedule_start;
 }
 
 int main() {
@@ -444,13 +445,13 @@ int main() {
     stdio_init_all();
 
     // Initialize VGA
-    initVGA() ;
+    initVGA();
 
      ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
-    i2c_init(I2C_CHAN, I2C_BAUD_RATE) ;
-    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C) ;
-    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C) ;
+    i2c_init(I2C_CHAN, I2C_BAUD_RATE);
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
 
     // MPU6050 initialization
     mpu6050_reset();
@@ -487,8 +488,8 @@ int main() {
     irq_set_enabled(PWM_IRQ_WRAP, true);
 
     // This section configures the period of the PWM signals
-    pwm_set_wrap(slice_num, WRAPVAL) ;
-    pwm_set_clkdiv(slice_num, CLKDIV) ;
+    pwm_set_wrap(slice_num, WRAPVAL);
+    pwm_set_clkdiv(slice_num, CLKDIV);
 
     // This sets duty cycle
     pwm_set_chan_level(slice_num, PWM_CHAN_A, 3000);
@@ -504,11 +505,10 @@ int main() {
     multicore_launch_core1(core1_entry);
 
     // start core 0
-    gpio_init(14) ;
-    gpio_set_dir(14, GPIO_OUT) ;
-    gpio_put(14, 0) ;
-    pt_add_thread(protothread_serial) ;
+    gpio_init(14);
+    gpio_set_dir(14, GPIO_OUT);
+    gpio_put(14, 0);
+    pt_add_thread(protothread_serial);
     pt_add_thread(protothread_status);
-    pt_schedule_start ;
-
+    pt_schedule_start;
 }
