@@ -3,7 +3,7 @@
  * Based on PWM and IMU demo code by V. Hunter Adams (vha3@cornell.edu)
  *
  * The 1 kHz PWM interrupt reads the MPU6050, estimates the beam angle with a
- * complementary filter, and sets the motor PWM duty with P control.
+ * complementary filter, and sets the motor PWM duty with PI control.
  * The VGA shows the beam angle and the low-passed motor command. Serial
  * commands over UART0 set the requested angle and the PID gains.
  *
@@ -42,11 +42,19 @@
 #include "hardware/sync.h"
 #include "pt_cornell_rp2040_v1_4.h"
 
-// PWM wrap value and clock divide value
-// For a CPU rate of 150 MHz, this gives
-// a PWM frequency of 1 kHz.
-#define WRAPVAL 5800
+// PWM period is independent of the allowed motor command range.
+// 150 MHz / (25 * (5999 + 1)) = 1 kHz, or 1 ms per update.
+#define WRAPVAL 5999
 #define CLKDIV 25.0f
+#define CONTROL_DT 0.001f
+
+// PI control parameters (PWM counts; angle error is in degrees).
+#define STARTUP_OFFSET 3000
+#define KP 100.0f
+#define KI 50.0f
+#define KD 0.0f  // Reserved; the controller currently uses only P and I.
+#define CONTROL_MIN 1000.0f
+#define CONTROL_MAX 4500.0f
 
 // GPIO we're using for PWM
 #define PWM_OUT 4
@@ -58,8 +66,6 @@
 #define PLOT_HEIGHT 150
 #define ANGLE_MIN 0.0f
 #define ANGLE_MAX 180.0f
-#define CONTROL_MIN 0.0f
-#define CONTROL_MAX ((float)WRAPVAL)
 
 // Place the plots
 #define TOP_PLOT_BOTTOM 230
@@ -88,12 +94,11 @@ volatile fix15 complementary_angle;
 // Degrees in the arm convention above (0..180).
 volatile float requested_angle = 90;
 
-// PID gains, set from the serial console. Only kp is used so far; ki and kd
-// are stored for the future I and D terms.
-volatile float kp = 0.5f;
+// PI gains, set from the serial console. Kd is reserved and has no effect.
+volatile float kp = KP;
 volatile float kerror = 0.0f;
-volatile float ki = 0.5f;
-volatile float kd = 0.0f;
+volatile float ki = KI;
+volatile float kd = KD;
 
 #define PI 3.14159265358979323846f
 
@@ -108,7 +113,7 @@ static fix15 armAngleFromAccel(fix15 ax, fix15 az) {
 }
 
 // Low-passed motor command, display only (the motor gets the raw control value)
-volatile fix15 filtered_control = int2fix15(3000);
+volatile fix15 filtered_control = int2fix15(STARTUP_OFFSET);
 
 // Arrays for circular display buffer
 fix15 angle_plot[PLOT_WIDTH];      // measured beam angle (deg)
@@ -214,23 +219,33 @@ static void drawStatusText(void) {
 }
 
 // PWM duty cycle
-volatile int control = 3000;
-volatile int old_control = 3000;
+volatile int control = STARTUP_OFFSET;
+volatile int old_control = STARTUP_OFFSET;
 
 volatile int throttle = 10;
 
-// P only: no accumulated error (I) or error-rate (D) term.
+// PI correction around STARTUP_OFFSET, with conditional integration.
 float doPid(float target_angle, float current_angle) {
-    
-    // Proportion
     float error = target_angle - current_angle;
+    float p_term = error * kp;
+    float integral_gain = ki;
 
-    if (control <= 100 || control >= 5800) {
-        kerror += error * 0.001f; // controller updates once every 1ms
+    if (integral_gain == 0.0f) {
+        kerror = 0.0f;
+    } else {
+        float next_integral = kerror + error * CONTROL_DT;
+        float next_command = STARTUP_OFFSET + p_term
+                           + next_integral * integral_gain;
+
+        // Integrate within the limits, or when error unwinds saturation.
+        if ((next_command >= CONTROL_MIN && next_command <= CONTROL_MAX) ||
+            (next_command > CONTROL_MAX && error < 0.0f) ||
+            (next_command < CONTROL_MIN && error > 0.0f)) {
+            kerror = next_integral;
+        }
     }
-    
 
-    return error * kp + kerror * ki;
+    return p_term + kerror * integral_gain;
 }
 
 // Command replies and telemetry share UART0, but use separate text buffers.
@@ -277,24 +292,24 @@ void on_pwm_wrap() {
 
     // Gyro angle delta (measurement times timestep) (15.16 fixed point),
     // flipped with ANGLE_DIRECTION so it matches the arm angle's sign
-    gyro_angle_delta = multfix15(gyro[2], zeropt001) * ANGLE_DIRECTION;
+    gyro_angle_delta = multfix15(gyro[2], float2fix15(CONTROL_DT)) * ANGLE_DIRECTION;
 
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
 
-    /* ========================== PID Control +++++++++++++++++++*/
+    /* ========================== PI Control +++++++++++++++++++*/
     float correction = doPid(
     requested_angle,
     fix2float15(complementary_angle)
     );
 
-    // Replace 3000 with the PWM level that holds your desired position.
-    float pwm_command = control + correction;
+    // Holding command plus the PI correction.
+    float pwm_command = STARTUP_OFFSET + correction;
 
     // Keep the command within the valid PWM range.
-    pwm_command = fminf((float)WRAPVAL, fmaxf(100.0f, pwm_command));
+    pwm_command = fminf(CONTROL_MAX, fmaxf(CONTROL_MIN, pwm_command));
     control = (int)lroundf(pwm_command);
-    /*========== P Control End ++++++++++++++++++++++++++++++*/
+    /*========== PI Control End ++++++++++++++++++++++++++++++*/
 
     // Low-pass the motor command for display, same 1/16 filter as the accel
     filtered_control = filtered_control
@@ -355,7 +370,7 @@ static PT_THREAD (protothread_draw(struct pt *pt)) {
             drawPixel(LEFT_EDGE + i, plotY(TOP_PLOT_BOTTOM,
                 fix2float15(angle_plot[start]), ANGLE_MIN, ANGLE_MAX), WHITE);
             drawPixel(LEFT_EDGE + i, plotY(BOTTOM_PLOT_BOTTOM,
-                fix2float15(control_plot[start]), CONTROL_MIN, CONTROL_MAX), GREEN);
+                fix2float15(control_plot[start]), 0.0f, (float)WRAPVAL), GREEN);
             start = ((start+1)==PLOT_WIDTH) ? 0 : (start+1);
         }
     }
@@ -500,7 +515,6 @@ int main() {
 
     // Start complementary filter at accelerometer estimate
     complementary_angle = accel_angle;
-    requested_angle = fix2float15(complementary_angle);
 
     ////////////////////////////////////////////////////////////////////////
     ///////////////////////// PWM CONFIGURATION ////////////////////////////
@@ -523,7 +537,7 @@ int main() {
     pwm_set_clkdiv(slice_num, CLKDIV);
 
     // This sets duty cycle
-    pwm_set_chan_level(slice_num, PWM_CHAN_A, 3000);
+    pwm_set_chan_level(slice_num, PWM_CHAN_A, STARTUP_OFFSET);
 
     // Start the channel
     pwm_set_mask_enabled((1u << slice_num));
