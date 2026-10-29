@@ -73,11 +73,19 @@ fix15 acceleration[3], gyro[3];
 volatile fix15 filtered_ax;
 volatile fix15 filtered_az;
 
+// Arm angle convention: 0 = hanging straight down, 90 = sideways, 180 = up.
+// Calibrate on the rig: RAW_ANGLE_AT_DOWN is the raw atan2 angle (0..360, what
+// the old firmware displayed as "Actual") with the arm hanging straight down.
+// ANGLE_DIRECTION is 1 if that raw angle increased as the arm swung up, -1 if
+// it decreased.
+#define RAW_ANGLE_AT_DOWN 0.0f
+#define ANGLE_DIRECTION 1
+
 // Angle estimates
 volatile fix15 accel_angle;
 volatile fix15 gyro_angle_delta;
 volatile fix15 complementary_angle;
-// Degrees in the same 0..360 convention as the accelerometer angle.
+// Degrees in the arm convention above (0..180).
 volatile float requested_angle = 90;
 
 // PID gains, set from the serial console. Only kp is used so far; ki and kd
@@ -88,6 +96,16 @@ volatile float ki = 0.5f;
 volatile float kd = 0.0f;
 
 #define PI 3.14159265358979323846f
+
+// Accelerometer arm angle in degrees, wrapped to [-90, 270) so the arm's
+// whole 0..180 travel is continuous (no 0/360 seam to confuse the filter).
+static fix15 armAngleFromAccel(fix15 ax, fix15 az) {
+    float raw = (float)((atan2(-ax, az) + PI) * 180.0 / PI);
+    float arm = ANGLE_DIRECTION * (raw - RAW_ANGLE_AT_DOWN);
+    while (arm < -90.0f) arm += 360.0f;
+    while (arm >= 270.0f) arm -= 360.0f;
+    return float2fix15(arm);
+}
 
 // Low-passed motor command, display only (the motor gets the raw control value)
 volatile fix15 filtered_control = int2fix15(3000);
@@ -150,10 +168,10 @@ void drawAxes() {
     setTextColor(RED);
     writeString("  target");
     setTextColor(WHITE);
-    sprintf(screentext, "180");
+    sprintf(screentext, "90");
     setCursor(50, 150);
     writeString(screentext);
-    sprintf(screentext, "360");
+    sprintf(screentext, "180");
     setCursor(50, 75);
     writeString(screentext);
     sprintf(screentext, "0");
@@ -252,10 +270,11 @@ void on_pwm_wrap() {
                 + ((acceleration[2] - filtered_az) >> 4);
 
     // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
-    accel_angle = multfix15(float2fix15(atan2(-filtered_ax, filtered_az) + PI), oneeightyoverpi);
+    accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
 
-    // Gyro angle delta (measurement times timestep) (15.16 fixed point)
-    gyro_angle_delta = multfix15(gyro[2], zeropt001);
+    // Gyro angle delta (measurement times timestep) (15.16 fixed point),
+    // flipped with ANGLE_DIRECTION so it matches the arm angle's sign
+    gyro_angle_delta = multfix15(gyro[2], zeropt001) * ANGLE_DIRECTION;
 
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
@@ -276,7 +295,7 @@ void on_pwm_wrap() {
 
     // Low-pass the motor command for display, same 1/16 filter as the accel
     filtered_control = filtered_control
-                     + ((int2fix15(control) - filtered_control) >> 4);
+                     + ((int2fix15(control) - filtered_control) >> 2);
     
     // Increment drawspeed controller
     throttle += 1;
@@ -375,16 +394,16 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
             }
             serial_write_locked;
         } else if (classifier == 'a') {
-            sprintf(pt_serial_out_buffer, "requested angle (0-360 degrees): ");
+            sprintf(pt_serial_out_buffer, "requested angle (0-180 degrees): ");
             serial_write_locked;
             serial_read;
             if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
-                isfinite(angle_in) && angle_in >= 0.0f && angle_in <= 360.0f) {
+                isfinite(angle_in) && angle_in >= 0.0f && angle_in <= 180.0f) {
                 requested_angle = angle_in;
                 snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
                          "requested angle set to %.1f deg\r\n", (double)angle_in);
             } else {
-                sprintf(pt_serial_out_buffer, "invalid angle; enter a number from 0 to 360\r\n");
+                sprintf(pt_serial_out_buffer, "invalid angle; enter a number from 0 to 180\r\n");
             }
             serial_write_locked;
         } else {
@@ -474,10 +493,7 @@ int main() {
     filtered_az = acceleration[2];
 
     // Get initial absolute angle from accelerometer
-    accel_angle = multfix15(
-        float2fix15(atan2(-filtered_ax, filtered_az) + PI),
-        oneeightyoverpi
-    );
+    accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
 
     // Start complementary filter at accelerometer estimate
     complementary_angle = accel_angle;

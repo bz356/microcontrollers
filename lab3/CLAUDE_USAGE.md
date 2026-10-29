@@ -24,6 +24,12 @@ Entry template:
 
 ## Sandra
 
+### 2026-10-29 — lab3 — 0–180 arm angle convention
+- **Asked:** make the VGA show 0–180 deg, with arm down = 0, sideways = 90, up = 180
+- **Result:** Added `armAngleFromAccel()` in `pwm-demo.c`: converts the raw atan2 angle (0–360) to the arm convention using two calibration constants, `RAW_ANGLE_AT_DOWN` and `ANGLE_DIRECTION`, and wraps to [-90, 270) so the arm's travel never crosses a seam. Gyro delta is multiplied by `ANGLE_DIRECTION` to match. Top-plot labels changed to 0/90/180 (the plot was already scaled 0–180 but labeled 180/360). Serial `a` command now accepts 0–180. Builds cleanly; constants still need calibrating on the rig, not hardware-tested.
+- **Files touched:** `pwm-demo.c`, `CLAUDE_USAGE.md`
+- **Commits:** none
+
 ### 2026-10-22 — repo — usage log
 - **Asked:** create a shared .md log for tracking Claude usage across partners
 - **Result:** this file
