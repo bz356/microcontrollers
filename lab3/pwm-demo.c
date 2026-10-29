@@ -45,7 +45,7 @@
 // PWM wrap value and clock divide value
 // For a CPU rate of 150 MHz, this gives
 // a PWM frequency of 1 kHz.
-#define WRAPVAL 6000
+#define WRAPVAL 5800
 #define CLKDIV 25.0f
 
 // GPIO we're using for PWM
@@ -225,7 +225,10 @@ float doPid(float target_angle, float current_angle) {
     // Proportion
     float error = target_angle - current_angle;
 
-    kerror += error * 0.001f; // controller updates once every 1ms
+    if (control <= 100 || control >= 5800) {
+        kerror += error * 0.001f; // controller updates once every 1ms
+    }
+    
 
     return error * kp + kerror * ki;
 }
@@ -279,17 +282,17 @@ void on_pwm_wrap() {
     // Complementary angle (degrees - 15.16 fixed point)
     complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
 
-    /* ========================== P Control +++++++++++++++++++*/
+    /* ========================== PID Control +++++++++++++++++++*/
     float correction = doPid(
     requested_angle,
     fix2float15(complementary_angle)
     );
 
     // Replace 3000 with the PWM level that holds your desired position.
-    float pwm_command = 3000.0f + correction;
+    float pwm_command = control + correction;
 
     // Keep the command within the valid PWM range.
-    pwm_command = fminf((float)WRAPVAL, fmaxf(0.0f, pwm_command));
+    pwm_command = fminf((float)WRAPVAL, fmaxf(100.0f, pwm_command));
     control = (int)lroundf(pwm_command);
     /*========== P Control End ++++++++++++++++++++++++++++++*/
 
