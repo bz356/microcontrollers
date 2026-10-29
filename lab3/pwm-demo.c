@@ -244,9 +244,11 @@ float doPid(float target_angle, float current_angle) {
     // derivative 
     static float prev_angle = 0.0f;
     static float filtered_rate = 0.0f;
-    float rate = (current_angle - prev_angle) * 1000.0f; // deg/s
+    float rate = (current_angle - prev_angle) * (1.0f / CONTROL_DT); // deg/s
+    prev_angle = current_angle;
 
     filtered_rate += (rate - filtered_rate) * 0.0625f; // 1/16 rn
+
 
     return p_term + kerror * integral_gain - filtered_rate * kd;
 
