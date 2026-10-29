@@ -68,6 +68,9 @@
 
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
+// False if the MPU6050 did not answer at startup; the ISR then skips I2C reads
+// (each failed read burns its timeouts and would starve core 0).
+static bool imu_present;
 
 // Low-pass filtered accelerometer values
 volatile fix15 filtered_ax;
@@ -236,7 +239,9 @@ void on_pwm_wrap() {
     // NOTE! This is in 15.16 fixed point. Accel in g's, gyro in deg/s
     // If you want these values in floating point, call fix2float15() on
     // the raw measurements.
-    mpu6050_read_raw(acceleration, gyro);
+    if (imu_present) {
+        mpu6050_read_raw(acceleration, gyro);
+    }
 
     // Low-pass the accelerometer measurements before atan2
     filtered_ax = filtered_ax
@@ -443,6 +448,7 @@ int main() {
 
     // Initialize stdio
     stdio_init_all();
+    printf("\nlab3 PWM demo booting\n");
 
     // Initialize VGA
     initVGA();
@@ -452,10 +458,17 @@ int main() {
     i2c_init(I2C_CHAN, I2C_BAUD_RATE);
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    // Pins reset with pull-downs; without pull-ups SCL sits low if no IMU is attached.
+    gpio_pull_up(SDA_PIN);
+    gpio_pull_up(SCL_PIN);
 
     // MPU6050 initialization
-    mpu6050_reset();
-    mpu6050_read_raw(acceleration, gyro);
+    imu_present = mpu6050_reset();
+    if (imu_present) {
+        mpu6050_read_raw(acceleration, gyro);
+    } else {
+        printf("MPU6050 not found on GPIO %d/%d; IMU reads disabled\n", SDA_PIN, SCL_PIN);
+    }
 
     // Initialize accelerometer filters
     filtered_ax = acceleration[0];
