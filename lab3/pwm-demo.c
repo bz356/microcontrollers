@@ -75,10 +75,6 @@
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
 
-// Low-pass filtered accelerometer values
-volatile fix15 filtered_ax;
-volatile fix15 filtered_az;
-
 // Arm angle convention: 0 = hanging straight down, 90 = sideways, 180 = up.
 // Calibrate on the rig: RAW_ANGLE_AT_DOWN is the raw atan2 angle (0..360, what
 // the old firmware displayed as "Actual") with the arm hanging straight down.
@@ -291,15 +287,9 @@ void on_pwm_wrap() {
     // the raw measurements.
     mpu6050_read_raw(acceleration, gyro);
 
-    // Low-pass the accelerometer measurements before atan2
-    filtered_ax = filtered_ax
-                + ((acceleration[0] - filtered_ax) >> 4);
-
-    filtered_az = filtered_az
-                + ((acceleration[2] - filtered_az) >> 4);
-
-    // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
-    accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
+    // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation).
+    // No separate low-pass: the complementary filter's 0.001 accel weight already smooths it.
+    accel_angle = armAngleFromAccel(acceleration[0], acceleration[2]);
 
     // Gyro angle delta (measurement times timestep) (15.16 fixed point),
     // flipped with ANGLE_DIRECTION so it matches the arm angle's sign
@@ -322,7 +312,7 @@ void on_pwm_wrap() {
     control = (int)lroundf(pwm_command);
     /*========== PI Control End ++++++++++++++++++++++++++++++*/
 
-    // Low-pass the motor command for display, same 1/16 filter as the accel
+    // Low-pass the motor command for display (1/4 filter)
     filtered_control = filtered_control
                      + ((int2fix15(control) - filtered_control) >> 2);
     
@@ -517,12 +507,8 @@ int main() {
     }
     mpu6050_read_raw(acceleration, gyro);
 
-    // Initialize accelerometer filters
-    filtered_ax = acceleration[0];
-    filtered_az = acceleration[2];
-
     // Get initial absolute angle from accelerometer
-    accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
+    accel_angle = armAngleFromAccel(acceleration[0], acceleration[2]);
 
     // Start complementary filter at accelerometer estimate
     complementary_angle = accel_angle;

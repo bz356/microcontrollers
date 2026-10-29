@@ -20,7 +20,7 @@ typedef signed int fix15 ;
 #define divfix(a,b) ((fix15)(((( signed long long)(a) << 16 / (b)))))
 // Parameter values
 #define oneeightyoverpi 3754936
-#define zeropt001 65
+#define zeropt001 66   // 66 + zeropt999 = 65536, so complementary weights sum to 1
 #define zeropt999 65470
 #define zeropt01 655
 #define zeropt99 64880
