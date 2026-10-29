@@ -4,8 +4,39 @@
  *
  */
 
+#include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "mpu6050.h"
+
+// Free a bus left mid-transfer by a Pico reset: clock out 9 bits (the IMU sees
+// a NACK and lets go of SDA), then send a STOP. Lines are only pulled low or
+// released, never driven high. Call before i2c_init().
+void mpu6050_bus_recover(void) {
+    gpio_init(SDA_PIN);
+    gpio_init(SCL_PIN);
+    gpio_pull_up(SDA_PIN);
+    gpio_pull_up(SCL_PIN);
+    // Output latch stays 0; switching direction picks "pull low" or "release"
+    gpio_put(SDA_PIN, 0);
+    gpio_put(SCL_PIN, 0);
+    gpio_set_dir(SDA_PIN, GPIO_IN);
+    gpio_set_dir(SCL_PIN, GPIO_IN);
+    sleep_us(5);
+
+    // 9 clocks at ~100 kHz
+    for (int i = 0; i < 9; i++) {
+        gpio_set_dir(SCL_PIN, GPIO_OUT);  // SCL low
+        sleep_us(5);
+        gpio_set_dir(SCL_PIN, GPIO_IN);   // SCL released high
+        sleep_us(5);
+    }
+
+    // STOP: SDA goes low -> high while SCL is high
+    gpio_set_dir(SCL_PIN, GPIO_OUT); sleep_us(5);  // SCL low
+    gpio_set_dir(SDA_PIN, GPIO_OUT); sleep_us(5);  // SDA low
+    gpio_set_dir(SCL_PIN, GPIO_IN);  sleep_us(5);  // SCL high
+    gpio_set_dir(SDA_PIN, GPIO_IN);  sleep_us(5);  // SDA high = STOP
+}
 
 // Returns false if the IMU does not acknowledge the wake-up write. All setup
 // writes are still sent. Timeouts keep a stuck bus from hanging startup.

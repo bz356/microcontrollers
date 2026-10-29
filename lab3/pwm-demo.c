@@ -503,6 +503,8 @@ int main() {
 
      ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
+    // Unstick the IMU if a reset caught it mid-transfer (it keeps power across resets)
+    mpu6050_bus_recover();
     i2c_init(I2C_CHAN, I2C_BAUD_RATE);
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
