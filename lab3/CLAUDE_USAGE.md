@@ -112,6 +112,12 @@ Entry template:
 
 ## Benson
 
+### 2026-10-29 - lab3 - Stop disabling the IMU (Claude)
+- **Asked:** "why is it not going to request angle with just p, it's like 20 degrees off"; "can you stop deactivating the IMU" / "make the fix to stop turning off the IMU now".
+- **Result:** Explained P-only steady-state error: error = (u_hold - 3000) / kp. The default kp = 0.5 is far too small, and the I term (ki is stored but unused) removes the error. Removed the `imu_present` flag so the PWM ISR and startup always call `mpu6050_read_raw`. A failed reset only prints `MPU6050 did not answer on GPIO 8/9`. `mpu6050_reset()` no longer returns early when the wake-up write fails: it sends every setup write and then returns whether the wake-up write was acknowledged. Kept the SDA/SCL pull-ups, the boot print, and the 1 ms write timeouts. Not compiled.
+- **Files touched:** `pwm-demo.c`, `mpu6050.c`, `CLAUDE_USAGE.md`.
+- **Commits:** none.
+
 ### 2026-10-28 - lab3 - No UART output; startup I2C hang fix (Claude)
 - **Asked:** Whether lab1/2/3 print with only USB connected; then "something is wrong with the thread uart", clarified as "i just see nothing".
 - **Result:** Only lab2 prints over USB (two lines after a 5 s delay); lab1's boot prints go out before USB enumerates, and lab3 uses UART0 only (GPIO 0/1). Diagnosis for lab3: `main` can hang in `mpu6050_reset()` before the protothreads start, because it used `i2c_write_blocking` with no timeout and SDA/SCL had no pull-ups (pins reset with pull-downs), so a missing IMU leaves SCL low. Also, with no IMU, each 1 kHz ISR would burn four 250 us I2C timeouts and starve core 0. Fixes: `mpu6050_reset()` now uses `i2c_write_timeout_us` (1 ms) and returns `bool` (false if the first write is not acknowledged); `pwm-demo.c` enables pull-ups on SDA/SCL, prints a boot line right after `stdio_init_all()`, stores `imu_present`, prints a warning if the IMU is missing, and skips `mpu6050_read_raw` in the ISR when it is absent. Not compiled (the build was declined) and not tested on hardware.

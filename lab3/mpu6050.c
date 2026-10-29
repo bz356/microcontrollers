@@ -7,16 +7,14 @@
 #include "hardware/i2c.h"
 #include "mpu6050.h"
 
-// Returns false if the IMU does not acknowledge. Timeouts keep a missing
-// IMU or a stuck bus from hanging startup.
+// Returns false if the IMU does not acknowledge the wake-up write. All setup
+// writes are still sent. Timeouts keep a stuck bus from hanging startup.
 bool mpu6050_reset() {
     // Two byte reset. First byte register, second byte data
     // There are a load more options to set up the device in
     // different ways that could be added here
     uint8_t buf[] = {0x6B, 0x00};
-    if (i2c_write_timeout_us(I2C_CHAN, ADDRESS, buf, 2, false, 1000) != 2) {
-        return false;
-    }
+    bool acked = i2c_write_timeout_us(I2C_CHAN, ADDRESS, buf, 2, false, 1000) == 2;
 
     // Set gyro sample rate (set to 1KHz, same as accel)
     uint8_t gyro_rate[] = {0x19, 0b00000111} ;
@@ -37,7 +35,7 @@ bool mpu6050_reset() {
     // Configure data ready interrupt
     uint8_t int_config[] = {0x38, 0x01} ;
     i2c_write_timeout_us(I2C_CHAN, ADDRESS, int_config, 2, false, 1000);
-    return true;
+    return acked;
 }
 
 void mpu6050_read_raw(fix15 accel[3], fix15 gyro[3]) {

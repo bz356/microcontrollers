@@ -68,9 +68,6 @@
 
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
-// False if the MPU6050 did not answer at startup; the ISR then skips I2C reads
-// (each failed read burns its timeouts and would starve core 0).
-static bool imu_present;
 
 // Low-pass filtered accelerometer values
 volatile fix15 filtered_ax;
@@ -245,9 +242,7 @@ void on_pwm_wrap() {
     // NOTE! This is in 15.16 fixed point. Accel in g's, gyro in deg/s
     // If you want these values in floating point, call fix2float15() on
     // the raw measurements.
-    if (imu_present) {
-        mpu6050_read_raw(acceleration, gyro);
-    }
+    mpu6050_read_raw(acceleration, gyro);
 
     // Low-pass the accelerometer measurements before atan2
     filtered_ax = filtered_ax
@@ -469,12 +464,10 @@ int main() {
     gpio_pull_up(SCL_PIN);
 
     // MPU6050 initialization
-    imu_present = mpu6050_reset();
-    if (imu_present) {
-        mpu6050_read_raw(acceleration, gyro);
-    } else {
-        printf("MPU6050 not found on GPIO %d/%d; IMU reads disabled\n", SDA_PIN, SCL_PIN);
+    if (!mpu6050_reset()) {
+        printf("MPU6050 did not answer on GPIO %d/%d\n", SDA_PIN, SCL_PIN);
     }
+    mpu6050_read_raw(acceleration, gyro);
 
     // Initialize accelerometer filters
     filtered_ax = acceleration[0];
