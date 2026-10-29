@@ -78,7 +78,7 @@ volatile fix15 filtered_az;
 // the old firmware displayed as "Actual") with the arm hanging straight down.
 // ANGLE_DIRECTION is 1 if that raw angle increased as the arm swung up, -1 if
 // it decreased.
-#define RAW_ANGLE_AT_DOWN 0.0f
+#define RAW_ANGLE_AT_DOWN 90.0f
 #define ANGLE_DIRECTION 1
 
 // Angle estimates
