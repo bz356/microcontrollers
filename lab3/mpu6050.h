@@ -28,5 +28,5 @@ typedef signed int fix15 ;
 #define zeropt9 58982
 
 // VGA primitives - usable in main
-void mpu6050_reset(void) ;
+bool mpu6050_reset(void) ;
 void mpu6050_read_raw(fix15 accel[3], fix15 gyro[3]) ;
