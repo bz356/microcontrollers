@@ -224,7 +224,7 @@ volatile int old_control = STARTUP_OFFSET;
 
 volatile int throttle = 10;
 
-// PI correction around STARTUP_OFFSET, with conditional integration.
+// PID
 float doPid(float target_angle, float current_angle) {
     float error = target_angle - current_angle;
     float p_term = error * kp;
@@ -245,7 +245,16 @@ float doPid(float target_angle, float current_angle) {
         }
     }
 
-    return p_term + kerror * integral_gain;
+    // derivative 
+    static float prev_angle = 0.0f;
+    static float filtered_rate = 0.0f;
+    float rate = (current_angle - prev_angle) * 1000.0f; // deg/s
+
+    filtered_rate += (rate - filtered_rate) * 0.0625f; // 1/16 rn
+
+    return p_term + kerror * integral_gain - filtered_rate * kd;
+
+    //return error * kp + kerror * ki - filtered_rate * kd;
 }
 
 // Command replies and telemetry share UART0, but use separate text buffers.
