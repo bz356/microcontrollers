@@ -57,7 +57,7 @@
 // Plot height in pixels and the value range each plot covers
 #define PLOT_HEIGHT 150
 #define ANGLE_MIN 0.0f
-#define ANGLE_MAX 360.0f
+#define ANGLE_MAX 180.0f
 #define CONTROL_MIN 0.0f
 #define CONTROL_MAX ((float)WRAPVAL)
 
@@ -86,7 +86,8 @@ volatile float requested_angle = 90;
 // PID gains, set from the serial console. Only kp is used so far; ki and kd
 // are stored for the future I and D terms.
 volatile float kp = 0.5f;
-volatile float ki = 0.0f;
+volatile float kerror = 0.0f;
+volatile float ki = 0.5f;
 volatile float kd = 0.0f;
 
 #define PI 3.14159265358979323846f
@@ -205,8 +206,13 @@ volatile int throttle = 10;
 
 // P only: no accumulated error (I) or error-rate (D) term.
 float doPid(float target_angle, float current_angle) {
+    
+    // Proportion
     float error = target_angle - current_angle;
-    return error * kp;
+
+    kerror += error * 0.001f; // controller updates once every 1ms
+
+    return error * kp + kerror * ki;
 }
 
 // Command replies and telemetry share UART0, but use separate text buffers.
