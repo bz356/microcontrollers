@@ -225,7 +225,8 @@ volatile int old_control = STARTUP_OFFSET;
 volatile int throttle = 10;
 
 // PID
-float doPid(float target_angle, float current_angle) {
+// angular_rate: arm angular rate in deg/s (arm convention), straight from the gyro
+float doPid(float target_angle, float current_angle, float angular_rate) {
     float error = target_angle - current_angle;
     float p_term = error * kp;
     float integral_gain = ki;
@@ -245,13 +246,9 @@ float doPid(float target_angle, float current_angle) {
         }
     }
 
-    // derivative 
-    static float prev_angle = 0.0f;
+    // derivative: low-pass the raw gyro rate instead of differentiating the angle
     static float filtered_rate = 0.0f;
-    float rate = (current_angle - prev_angle) * (1.0f / CONTROL_DT); // deg/s
-    prev_angle = current_angle;
-
-    filtered_rate += (rate - filtered_rate) * 0.0625f; // 1/16 rn
+    filtered_rate += (angular_rate - filtered_rate) * 0.0625f; // 1/16 rn
 
 
     return p_term + kerror * integral_gain - filtered_rate * kd;
@@ -311,7 +308,9 @@ void on_pwm_wrap() {
     /* ========================== PI Control +++++++++++++++++++*/
     float correction = doPid(
     requested_angle,
-    fix2float15(complementary_angle)
+    fix2float15(complementary_angle),
+    // Same sign as the complementary filter, which subtracts gyro_angle_delta
+    -fix2float15(gyro[2]) * ANGLE_DIRECTION
     );
 
     // Holding command plus the PI correction.
