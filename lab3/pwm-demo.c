@@ -309,40 +309,30 @@ void on_pwm_wrap() {
     pwm_clear_irq(pwm_gpio_to_slice_num(PWM_OUT));
     gpio_put(14, !gpio_get(14));
 
-    // Read the IMU, unless the recovery thread currently owns the I2C bus.
+    // Read the IMU
     // NOTE! This is in 15.16 fixed point. Accel in g's, gyro in deg/s
     // If you want these values in floating point, call fix2float15() on
-    // the raw measurements. On a failed read the arrays keep the last
-    // good values.
-    bool imu_ok = !imu_recovering && mpu6050_read_raw(acceleration, gyro);
+    // the raw measurements.
+    mpu6050_read_raw(acceleration, gyro);
 
-    if (imu_ok) {
-        imu_fail_streak = 0;
+    // Low-pass the accelerometer measurements before atan2
+    filtered_ax = filtered_ax
+                + ((acceleration[0] - filtered_ax) >> 4);
 
-        // Low-pass the accelerometer measurements before atan2
-        filtered_ax = filtered_ax
-                    + ((acceleration[0] - filtered_ax) >> 4);
+    filtered_az = filtered_az
+                + ((acceleration[2] - filtered_az) >> 4);
 
-        filtered_az = filtered_az
-                    + ((acceleration[2] - filtered_az) >> 4);
+    // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
+    accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
 
-        // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
-        accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
+    // Gyro angle delta (measurement times timestep) (15.16 fixed point).
+    // The beam swings in the IMU's X-Z plane, i.e. it rotates about the
+    // Y axis, so gyro[1] is the rate that matches the accel angle.
+    // Flipped with ANGLE_DIRECTION so it matches the arm angle's sign.
+    gyro_angle_delta = multfix15(gyro[1], float2fix15(CONTROL_DT)) * ANGLE_DIRECTION;
 
-        // Gyro angle delta (measurement times timestep) (15.16 fixed point),
-        // flipped with ANGLE_DIRECTION so it matches the arm angle's sign
-        gyro_angle_delta = multfix15(gyro[2], float2fix15(CONTROL_DT)) * ANGLE_DIRECTION;
-
-        // Complementary angle (degrees - 15.16 fixed point)
-        complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
-    } else if (!imu_recovering) {
-        // Failed read: keep the previous angle estimate. After several
-        // failures in a row, hand the bus to protothread_imu_recover.
-        imu_read_errors++;
-        if (++imu_fail_streak >= IMU_FAIL_LIMIT) {
-            imu_recovering = true;
-        }
-    }
+    // Complementary angle (degrees - 15.16 fixed point)
+    complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
 
     /* ========================== PID Control ==================*/
     if (motor_off) {
@@ -350,15 +340,12 @@ void on_pwm_wrap() {
         // up so the sequence starts without windup.
         kerror = 0.0f;
         control = 0;
-    } else if (!imu_ok) {
-        // No fresh measurement: hold the previous command rather than run
-        // the PID on a stale angle (which would wind up the integral).
     } else {
         float correction = doPid(
         requested_angle,
         fix2float15(complementary_angle),
         // Same sign as the complementary filter, which subtracts gyro_angle_delta
-        -fix2float15(gyro[2]) * ANGLE_DIRECTION
+        -fix2float15(gyro[1]) * ANGLE_DIRECTION
         );
 
         // Holding command plus the PID correction.
@@ -612,19 +599,12 @@ int main() {
 
      ////////////////////////////////////////////////////////////////////////
     ///////////////////////// I2C CONFIGURATION ////////////////////////////
-    // Unstick the IMU if a reset caught it mid-transfer (it keeps power across resets)
-    mpu6050_bus_recover();
     i2c_init(I2C_CHAN, I2C_BAUD_RATE);
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
-    // Pins reset with pull-downs; without pull-ups SCL sits low if no IMU is attached.
-    gpio_pull_up(SDA_PIN);
-    gpio_pull_up(SCL_PIN);
 
     // MPU6050 initialization
-    if (!mpu6050_reset()) {
-        printf("MPU6050 did not answer on GPIO %d/%d\n", SDA_PIN, SCL_PIN);
-    }
+    mpu6050_reset();
     mpu6050_read_raw(acceleration, gyro);
 
     // Initialize accelerometer filters
