@@ -3,12 +3,15 @@
  * Based on PWM and IMU demo code by V. Hunter Adams (vha3@cornell.edu)
  *
  * The 1 kHz PWM interrupt reads the MPU6050, estimates the beam angle with a
- * complementary filter, and sets the motor PWM duty with PI control.
+ * complementary filter, and sets the motor PWM duty with PID control.
  * The VGA shows the beam angle and the low-passed motor command. Serial
  * commands over UART0 set the requested angle and the PID gains.
+ * Holding the demo button turns the motor off; releasing it runs the
+ * timed angle sequence 90 -> 120 -> 60 -> 90 degrees (5 s apart).
  *
  * HARDWARE CONNECTIONS
  *  - GPIO 4 ---> PWM output
+ *  - GPIO BUTTON_PIN ---> pushbutton ---> GND (internal pull-up, active low)
  *  - GPIO 0 ---> UART0 TX (to USB-serial adapter RX)
  *  - GPIO 1 ---> UART0 RX (to USB-serial adapter TX)
  *  - GPIO 14 ---> scope (toggles every PWM interrupt)
@@ -48,16 +51,32 @@
 #define CLKDIV 25.0f
 #define CONTROL_DT 0.001f
 
-// PI control parameters (PWM counts; angle error is in degrees).
+// PID control parameters (PWM counts; angle error is in degrees,
+// angular rate for the D term is in deg/s).
 #define STARTUP_OFFSET 3000
 #define KP 100.0f
 #define KI 50.0f
-#define KD 0.0f  // Reserved; the controller currently uses only P and I.
+#define KD 0.0f
 #define CONTROL_MIN 1000.0f
 #define CONTROL_MAX 4500.0f
 
 // GPIO we're using for PWM
 #define PWM_OUT 4
+
+// Demo-sequence pushbutton: wire between this GPIO and GND (active low,
+// internal pull-up). Change this to whichever pin the button ends up on.
+#define BUTTON_PIN 26
+
+// Demo sequence targets (degrees, 0 = hanging down, 90 = horizontal)
+// and the time between steps.
+#define SEQ_HORIZONTAL 90.0f
+#define SEQ_ABOVE 120.0f   // ~30 degrees above horizontal
+#define SEQ_BELOW 60.0f    // ~30 degrees below horizontal
+#define SEQ_STEP_US 5000000ULL
+
+// Button polling period and how many identical reads count as a stable press
+#define BUTTON_POLL_US 10000
+#define BUTTON_STABLE_READS 2   // 2 reads x 10 ms = 20 ms debounce
 
 // We will start drawing at column 81
 #define LEFT_EDGE 81 
@@ -91,10 +110,18 @@ volatile fix15 filtered_az;
 volatile fix15 accel_angle;
 volatile fix15 gyro_angle_delta;
 volatile fix15 complementary_angle;
-// Degrees in the arm convention above (0..180).
+// Degrees in the arm convention above (0..180). Starts at horizontal.
 volatile float requested_angle = 90;
 
-// PI gains, set from the serial console. Kd is reserved and has no effect.
+// True while the demo button is held: the ISR forces the PWM to 0 and
+// clears the integral so the sequence starts from a clean state.
+volatile bool motor_off = false;
+
+// True while the timed demo sequence is running. A serial angle command
+// clears it so the user's angle is not overwritten by the next step.
+volatile bool sequence_active = false;
+
+// PID gains, set from the serial console.
 volatile float kp = KP;
 volatile float kerror = 0.0f;
 volatile float ki = KI;
@@ -127,8 +154,9 @@ volatile int head = 0;
 char screentext[40];
 
 // draw speed: one plot sample every PLOT_INTERVAL PWM interrupts (1 ms each),
-// so the 530-sample plot spans 530 * 10 ms = 5.3 s
-#define PLOT_INTERVAL 10
+// so the 530-sample plot spans 530 * 31 ms = 16.4 s, long enough to show
+// the whole 15 s button demo sequence on one screen
+#define PLOT_INTERVAL 31
 
 // Some macros for max/min/abs
 #define min(a,b) (((a)<(b)) ? (a):(b))
@@ -246,14 +274,13 @@ float doPid(float target_angle, float current_angle, float angular_rate) {
         }
     }
 
-    // derivative: low-pass the raw gyro rate instead of differentiating the angle
+    // Derivative: use the gyro rate (low-passed by 1/16) instead of
+    // differentiating the angle, which would amplify accelerometer noise.
+    // It is subtracted because a rising angle means the error is shrinking.
     static float filtered_rate = 0.0f;
-    filtered_rate += (angular_rate - filtered_rate) * 0.0625f; // 1/16 rn
-
+    filtered_rate += (angular_rate - filtered_rate) * 0.0625f;
 
     return p_term + kerror * integral_gain - filtered_rate * kd;
-
-    //return error * kp + kerror * ki - filtered_rate * kd;
 }
 
 // Command replies and telemetry share UART0, but use separate text buffers.
@@ -282,46 +309,68 @@ void on_pwm_wrap() {
     pwm_clear_irq(pwm_gpio_to_slice_num(PWM_OUT));
     gpio_put(14, !gpio_get(14));
 
-    // Read the IMU
+    // Read the IMU, unless the recovery thread currently owns the I2C bus.
     // NOTE! This is in 15.16 fixed point. Accel in g's, gyro in deg/s
     // If you want these values in floating point, call fix2float15() on
-    // the raw measurements.
-    mpu6050_read_raw(acceleration, gyro);
+    // the raw measurements. On a failed read the arrays keep the last
+    // good values.
+    bool imu_ok = !imu_recovering && mpu6050_read_raw(acceleration, gyro);
 
-    // Low-pass the accelerometer measurements before atan2
-    filtered_ax = filtered_ax
-                + ((acceleration[0] - filtered_ax) >> 4);
+    if (imu_ok) {
+        imu_fail_streak = 0;
 
-    filtered_az = filtered_az
-                + ((acceleration[2] - filtered_az) >> 4);
+        // Low-pass the accelerometer measurements before atan2
+        filtered_ax = filtered_ax
+                    + ((acceleration[0] - filtered_ax) >> 4);
 
-    // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
-    accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
+        filtered_az = filtered_az
+                    + ((acceleration[2] - filtered_az) >> 4);
 
-    // Gyro angle delta (measurement times timestep) (15.16 fixed point),
-    // flipped with ANGLE_DIRECTION so it matches the arm angle's sign
-    gyro_angle_delta = multfix15(gyro[2], float2fix15(CONTROL_DT)) * ANGLE_DIRECTION;
+        // Accelerometer angle (degrees - 15.16 fixed point), full atan2 (no small-angle approximation)
+        accel_angle = armAngleFromAccel(filtered_ax, filtered_az);
 
-    // Complementary angle (degrees - 15.16 fixed point)
-    complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
+        // Gyro angle delta (measurement times timestep) (15.16 fixed point),
+        // flipped with ANGLE_DIRECTION so it matches the arm angle's sign
+        gyro_angle_delta = multfix15(gyro[2], float2fix15(CONTROL_DT)) * ANGLE_DIRECTION;
 
-    /* ========================== PI Control +++++++++++++++++++*/
-    float correction = doPid(
-    requested_angle,
-    fix2float15(complementary_angle),
-    // Same sign as the complementary filter, which subtracts gyro_angle_delta
-    -fix2float15(gyro[2]) * ANGLE_DIRECTION
-    );
+        // Complementary angle (degrees - 15.16 fixed point)
+        complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
+    } else if (!imu_recovering) {
+        // Failed read: keep the previous angle estimate. After several
+        // failures in a row, hand the bus to protothread_imu_recover.
+        imu_read_errors++;
+        if (++imu_fail_streak >= IMU_FAIL_LIMIT) {
+            imu_recovering = true;
+        }
+    }
 
-    // Holding command plus the PI correction.
-    float pwm_command = STARTUP_OFFSET + correction;
+    /* ========================== PID Control ==================*/
+    if (motor_off) {
+        // Demo button held: motor fully off, and discard any integral built
+        // up so the sequence starts without windup.
+        kerror = 0.0f;
+        control = 0;
+    } else if (!imu_ok) {
+        // No fresh measurement: hold the previous command rather than run
+        // the PID on a stale angle (which would wind up the integral).
+    } else {
+        float correction = doPid(
+        requested_angle,
+        fix2float15(complementary_angle),
+        // Same sign as the complementary filter, which subtracts gyro_angle_delta
+        -fix2float15(gyro[2]) * ANGLE_DIRECTION
+        );
 
-    // Keep the command within the valid PWM range.
-    pwm_command = fminf(CONTROL_MAX, fmaxf(CONTROL_MIN, pwm_command));
-    control = (int)lroundf(pwm_command);
-    /*========== PI Control End ++++++++++++++++++++++++++++++*/
+        // Holding command plus the PID correction.
+        float pwm_command = STARTUP_OFFSET + correction;
 
-    // Low-pass the motor command for display, same 1/16 filter as the accel
+        // Keep the command within the valid PWM range.
+        pwm_command = fminf(CONTROL_MAX, fmaxf(CONTROL_MIN, pwm_command));
+        control = (int)lroundf(pwm_command);
+    }
+    /*========== PID Control End ==============================*/
+
+    // Low-pass the motor command for display (1/4 per sample)
     filtered_control = filtered_control
                      + ((int2fix15(control) - filtered_control) >> 2);
     
@@ -427,6 +476,7 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
             serial_read;
             if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
                 isfinite(angle_in) && angle_in >= 0.0f && angle_in <= 180.0f) {
+                sequence_active = false;  // a typed angle overrides the demo sequence
                 requested_angle = angle_in;
                 snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
                          "requested angle set to %.1f deg\r\n", (double)angle_in);
@@ -477,6 +527,65 @@ static PT_THREAD(protothread_status(struct pt *pt)) {
         next_status_us += STATUS_INTERVAL_US;
         if (next_status_us <= time_us_64()) {
             next_status_us = time_us_64() + STATUS_INTERVAL_US;
+        }
+    }
+    PT_END(pt);
+}
+
+// Demo button thread: polls BUTTON_PIN every 10 ms with a simple debounce.
+// While the button is held the motor is off (beam hangs down). On release
+// (time = 0) the target steps through horizontal, 30 deg above, 30 deg
+// below, and back to horizontal at 0, 5, 10 and 15 s, using whatever PID
+// gains are currently set. Millisecond-scale timing is fine here, so this
+// runs as a protothread rather than in the ISR.
+static PT_THREAD(protothread_button(struct pt *pt)) {
+    PT_BEGIN(pt);
+    static bool stable_pressed = false; // debounced button state
+    static bool last_raw = false;       // previous raw read
+    static int same_count = 0;          // consecutive identical raw reads
+    static uint64_t seq_start_us;       // time of button release
+    static int seq_step;                // next step to apply (1..3)
+    static uint64_t now;
+    static bool raw;
+
+    while (1) {
+        PT_YIELD_usec(BUTTON_POLL_US);
+        now = time_us_64();
+
+        // Debounce: accept a new state only after it reads the same
+        // BUTTON_STABLE_READS times in a row (~20 ms).
+        raw = !gpio_get(BUTTON_PIN);  // active low
+        same_count = (raw == last_raw) ? same_count + 1 : 0;
+        last_raw = raw;
+
+        if (same_count >= BUTTON_STABLE_READS && raw != stable_pressed) {
+            stable_pressed = raw;
+            if (stable_pressed) {
+                // Pressed: motor off, cancel any sequence in progress.
+                sequence_active = false;
+                requested_angle = 0.0f;
+                motor_off = true;
+            } else {
+                // Released: time = 0, target horizontal, motor back on.
+                requested_angle = SEQ_HORIZONTAL;
+                seq_start_us = now;
+                seq_step = 1;
+                sequence_active = true;
+                motor_off = false;
+            }
+        }
+
+        // Step the target every SEQ_STEP_US after release.
+        if (sequence_active && now - seq_start_us >= seq_step * SEQ_STEP_US) {
+            if (seq_step == 1) {
+                requested_angle = SEQ_ABOVE;       // t = 5 s
+            } else if (seq_step == 2) {
+                requested_angle = SEQ_BELOW;       // t = 10 s
+            } else {
+                requested_angle = SEQ_HORIZONTAL;  // t = 15 s, sequence done
+                sequence_active = false;
+            }
+            seq_step++;
         }
     }
     PT_END(pt);
@@ -565,7 +674,14 @@ int main() {
     gpio_init(14);
     gpio_set_dir(14, GPIO_OUT);
     gpio_put(14, 0);
+
+    // Demo button: input with pull-up, pressed reads low
+    gpio_init(BUTTON_PIN);
+    gpio_set_dir(BUTTON_PIN, GPIO_IN);
+    gpio_pull_up(BUTTON_PIN);
+
     pt_add_thread(protothread_serial);
+    pt_add_thread(protothread_button);
     pt_add_thread(protothread_status);
     pt_schedule_start;
 }

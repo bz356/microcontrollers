@@ -69,38 +69,48 @@ bool mpu6050_reset() {
     return acked;
 }
 
-void mpu6050_read_raw(fix15 accel[3], fix15 gyro[3]) {
-    // For this particular device, we send the device the register we want to read
-    // first, then subsequently read from the device. The register is auto incrementing
-    // so we don't need to keep sending the register we want, just the first.
+// Release the I2C peripheral, unstick the bus, and set the I2C peripheral up
+// again. Used at boot and whenever reads keep failing at runtime (an SDK
+// timeout can leave the controller or the IMU mid-transfer). Call
+// mpu6050_reset() afterwards to reconfigure the IMU.
+void mpu6050_bus_reinit(void) {
+    i2c_deinit(I2C_CHAN);
+    mpu6050_bus_recover();
+    i2c_init(I2C_CHAN, I2C_BAUD_RATE);
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    // Internal pull-ups (~50k) are weak for 400 kHz; external pull-ups on
+    // the breakout board do the real work.
+    gpio_pull_up(SDA_PIN);
+    gpio_pull_up(SCL_PIN);
+}
 
-    uint8_t buffer[6];
-    int16_t temp_accel, temp_gyro ;
+// Reads accel and gyro in one 14-byte burst (0x3B..0x48: accel XYZ, temp,
+// gyro XYZ), so all six values come from the same sample. Returns false if
+// any part of the transfer fails, and then leaves accel[] and gyro[]
+// untouched so the caller can keep the last good values.
+bool mpu6050_read_raw(fix15 accel[3], fix15 gyro[3]) {
+    uint8_t buffer[14];
+    uint8_t reg = 0x3B;
 
-    // Status value
-    uint32_t success;
-
-    // Start reading acceleration registers from register 0x3B for 6 bytes
-    uint8_t val = 0x3B;
-    i2c_write_timeout_us(I2C_CHAN, ADDRESS, &val, 1, true, 250); // true to keep master control of bus
-    i2c_read_timeout_us(I2C_CHAN, ADDRESS, buffer, 6, false, 250);
-
-    for (int i = 0; i < 3; i++) {
-        temp_accel = (buffer[i<<1] << 8 | buffer[(i<<1) + 1]);
-        accel[i] = temp_accel ;
-        accel[i] <<= 2 ; // convert to g's (fixed point)
+    // Send the start register, keeping control of the bus (repeated start).
+    // 2 bytes at 400 kHz take ~50 us.
+    if (i2c_write_timeout_us(I2C_CHAN, ADDRESS, &reg, 1, true, 200) != 1) {
+        return false;
+    }
+    // 15 bytes (address + 14 data) at 400 kHz take ~340 us.
+    if (i2c_read_timeout_us(I2C_CHAN, ADDRESS, buffer, 14, false, 600) != 14) {
+        return false;
     }
 
-    // Now gyro data from reg 0x43 for 6 bytes
-    // The register is auto incrementing on each read
-    val = 0x43;
-    i2c_write_timeout_us(I2C_CHAN, ADDRESS, &val, 1, true, 250);
-    i2c_read_timeout_us(I2C_CHAN, ADDRESS, buffer, 6, false, 250);  // False - finished with bus
-
     for (int i = 0; i < 3; i++) {
-        temp_gyro = (buffer[i<<1] << 8 | buffer[(i<<1) + 1]);
-        gyro[i] = temp_gyro ;
-        gyro[i] = multfix15(gyro[i], 500<<16) ; // deg/sec
+        int16_t temp_accel = (int16_t)(buffer[i<<1] << 8 | buffer[(i<<1) + 1]);
+        accel[i] = (fix15)temp_accel << 2;  // +/-2 g range: 16384 LSB/g -> g's (fixed point)
+
+        // Gyro starts at byte 8 (bytes 6-7 are temperature)
+        int16_t temp_gyro = (int16_t)(buffer[8 + (i<<1)] << 8 | buffer[8 + (i<<1) + 1]);
+        gyro[i] = multfix15((fix15)temp_gyro, 500<<16);  // +/-250 deg/s range: 131 LSB/(deg/s) -> deg/s
     }
+    return true;
 }
 /////////////////////////////////////////////////////////////////

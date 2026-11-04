@@ -29,5 +29,6 @@ typedef signed int fix15 ;
 
 // VGA primitives - usable in main
 void mpu6050_bus_recover(void) ;
+void mpu6050_bus_reinit(void) ;
 bool mpu6050_reset(void) ;
-void mpu6050_read_raw(fix15 accel[3], fix15 gyro[3]) ;
+bool mpu6050_read_raw(fix15 accel[3], fix15 gyro[3]) ;
