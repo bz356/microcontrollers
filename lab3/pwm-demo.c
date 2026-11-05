@@ -7,7 +7,7 @@
  * The VGA shows the beam angle and the low-passed motor command. Serial
  * commands over UART0 set the requested angle and the PID gains.
  * Holding the demo button turns the motor off; releasing it runs the
- * timed angle sequence 90 -> 120 -> 60 -> 90 degrees (5 s apart).
+ * timed angle sequence 0 -> 30 -> -30 -> 0 degrees (5 s apart).
  *
  * HARDWARE CONNECTIONS
  *  - GPIO 4 ---> PWM output
@@ -67,11 +67,12 @@
 // internal pull-up). Change this to whichever pin the button ends up on.
 #define BUTTON_PIN 26
 
-// Demo sequence targets (degrees, 0 = hanging down, 90 = horizontal)
+// Demo sequence targets (degrees, -90 = hanging down, 0 = horizontal)
 // and the time between steps.
-#define SEQ_HORIZONTAL 90.0f
-#define SEQ_ABOVE 120.0f   // ~30 degrees above horizontal
-#define SEQ_BELOW 60.0f    // ~30 degrees below horizontal
+#define SEQ_DOWN -90.0f
+#define SEQ_HORIZONTAL 0.0f
+#define SEQ_ABOVE 30.0f    // ~30 degrees above horizontal
+#define SEQ_BELOW -30.0f   // ~30 degrees below horizontal
 #define SEQ_STEP_US 5000000ULL
 
 // Button polling period and how many identical reads count as a stable press
@@ -83,8 +84,8 @@
 
 // Plot height in pixels and the value range each plot covers
 #define PLOT_HEIGHT 150
-#define ANGLE_MIN 0.0f
-#define ANGLE_MAX 180.0f
+#define ANGLE_MIN -90.0f
+#define ANGLE_MAX 90.0f
 
 // Place the plots
 #define TOP_PLOT_BOTTOM 230
@@ -98,7 +99,8 @@ fix15 acceleration[3], gyro[3];
 volatile fix15 filtered_ax;
 volatile fix15 filtered_az;
 
-// Arm angle convention: 0 = hanging straight down, 90 = sideways, 180 = up.
+// Arm angle convention (matches the lab spec): -90 deg (-1.57 rad) = hanging
+// straight down, 0 = horizontal, 90 deg (1.57 rad) = straight up.
 // Calibrate on the rig: RAW_ANGLE_AT_DOWN is the raw atan2 angle (0..360, what
 // the old firmware displayed as "Actual") with the arm hanging straight down.
 // ANGLE_DIRECTION is 1 if that raw angle increased as the arm swung up, -1 if
@@ -110,8 +112,8 @@ volatile fix15 filtered_az;
 volatile fix15 accel_angle;
 volatile fix15 gyro_angle_delta;
 volatile fix15 complementary_angle;
-// Degrees in the arm convention above (0..180). Starts at horizontal.
-volatile float requested_angle = 90;
+// Degrees in the arm convention above (-90..90). Starts at horizontal.
+volatile float requested_angle = 0;
 
 // True while the demo button is held: the ISR forces the PWM to 0 and
 // clears the integral so the sequence starts from a clean state.
@@ -128,14 +130,15 @@ volatile float ki = KI;
 volatile float kd = KD;
 
 #define PI 3.14159265358979323846f
+#define DEG_TO_RAD (PI / 180.0f)
 
-// Accelerometer arm angle in degrees, wrapped to [-90, 270) so the arm's
-// whole 0..180 travel is continuous (no 0/360 seam to confuse the filter).
+// Accelerometer arm angle in degrees, wrapped to [-180, 180) so the arm's
+// whole -90..90 travel is continuous (no seam to confuse the filter).
 static fix15 armAngleFromAccel(fix15 ax, fix15 az) {
     float raw = (float)((atan2(-ax, az) + PI) * 180.0 / PI);
-    float arm = ANGLE_DIRECTION * (raw - RAW_ANGLE_AT_DOWN);
-    while (arm < -90.0f) arm += 360.0f;
-    while (arm >= 270.0f) arm -= 360.0f;
+    float arm = ANGLE_DIRECTION * (raw - RAW_ANGLE_AT_DOWN) - 90.0f;
+    while (arm < -180.0f) arm += 360.0f;
+    while (arm >= 180.0f) arm -= 360.0f;
     return float2fix15(arm);
 }
 
@@ -201,14 +204,14 @@ void drawAxes() {
     setTextColor(RED);
     writeString("  target");
     setTextColor(WHITE);
-    sprintf(screentext, "90");
+    sprintf(screentext, "0");
     setCursor(50, 150);
     writeString(screentext);
-    sprintf(screentext, "180");
+    sprintf(screentext, "90");
     setCursor(50, 75);
     writeString(screentext);
-    sprintf(screentext, "0");
-    setCursor(50, 225);
+    sprintf(screentext, "-90");
+    setCursor(45, 225);
     writeString(screentext);
 }
 
@@ -230,18 +233,23 @@ static void drawStatusText(void) {
 
     setTextSize(2);
     setTextColor(WHITE);
-    snprintf(status_text, sizeof(status_text), "Actual: %.1f deg  Target: %.1f deg",
-             (double)angle_snapshot, (double)target_snapshot);
+    snprintf(status_text, sizeof(status_text), "Actual: %.1f deg (%.2f rad)",
+             (double)angle_snapshot, (double)(angle_snapshot * DEG_TO_RAD));
     setCursor(LEFT_EDGE, 4);
     writeString(status_text);
-    snprintf(status_text, sizeof(status_text), "Command: %d/%d (%.1f%% duty)",
-             (int)lroundf(command_snapshot), WRAPVAL,
-             (double)(command_snapshot * 100.0f / WRAPVAL));
+    snprintf(status_text, sizeof(status_text), "Target: %.1f deg (%.2f rad)",
+             (double)target_snapshot, (double)(target_snapshot * DEG_TO_RAD));
     setCursor(LEFT_EDGE, 24);
     writeString(status_text);
     snprintf(status_text, sizeof(status_text), "Kp: %.2f  Ki: %.2f  Kd: %.2f",
              (double)kp, (double)ki, (double)kd);
     setCursor(LEFT_EDGE, 44);
+    writeString(status_text);
+    // Below the motor command plot; the top three lines are full.
+    snprintf(status_text, sizeof(status_text), "Command: %d/%d (%.1f%% duty)",
+             (int)lroundf(command_snapshot), WRAPVAL,
+             (double)(command_snapshot * 100.0f / WRAPVAL));
+    setCursor(LEFT_EDGE, 446);
     writeString(status_text);
     setTextSize(1);
 }
@@ -458,17 +466,19 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
             }
             serial_write_locked;
         } else if (classifier == 'a') {
-            sprintf(pt_serial_out_buffer, "requested angle (0-180 degrees): ");
+            sprintf(pt_serial_out_buffer,
+                    "requested angle (-90 to 90 degrees, -90 = down, 0 = horizontal): ");
             serial_write_locked;
             serial_read;
             if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
-                isfinite(angle_in) && angle_in >= 0.0f && angle_in <= 180.0f) {
+                isfinite(angle_in) && angle_in >= -90.0f && angle_in <= 90.0f) {
                 sequence_active = false;  // a typed angle overrides the demo sequence
                 requested_angle = angle_in;
                 snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
-                         "requested angle set to %.1f deg\r\n", (double)angle_in);
+                         "requested angle set to %.1f deg (%.2f rad)\r\n",
+                         (double)angle_in, (double)(angle_in * DEG_TO_RAD));
             } else {
-                sprintf(pt_serial_out_buffer, "invalid angle; enter a number from 0 to 180\r\n");
+                sprintf(pt_serial_out_buffer, "invalid angle; enter a number from -90 to 90\r\n");
             }
             serial_write_locked;
         } else {
@@ -500,8 +510,10 @@ static PT_THREAD(protothread_status(struct pt *pt)) {
         duty_snapshot = old_control; // Last value actually applied by the PWM ISR.
         restore_interrupts(irq_state);
         snprintf(status_text, sizeof(status_text),
-                 "\r\nfiltered=%.1f deg  requested=%.1f deg  duty=%d/%d\r\n",
-                 (double)fix2float15(filtered_snapshot), (double)requested_snapshot,
+                 "\r\nfiltered=%.1f deg (%.2f rad)  requested=%.1f deg (%.2f rad)  duty=%d/%d\r\n",
+                 (double)fix2float15(filtered_snapshot),
+                 (double)(fix2float15(filtered_snapshot) * DEG_TO_RAD),
+                 (double)requested_snapshot, (double)(requested_snapshot * DEG_TO_RAD),
                  duty_snapshot, WRAPVAL);
 
         PT_YIELD_UNTIL(pt, !serial_tx_busy);
@@ -550,7 +562,7 @@ static PT_THREAD(protothread_button(struct pt *pt)) {
             if (stable_pressed) {
                 // Pressed: motor off, cancel any sequence in progress.
                 sequence_active = false;
-                requested_angle = 0.0f;
+                requested_angle = SEQ_DOWN;
                 motor_off = true;
             } else {
                 // Released: time = 0, target horizontal, motor back on.
