@@ -24,6 +24,12 @@ Entry template:
 
 ## Sandra
 
+### 2026-11-05 — lab3 — settling-time timer
+- **Asked:** a serial "timer" mode that times each new angle until the beam settles, with vertical start/end lines on the graph, to answer "What are the settling times at different angles?"
+- **Result:** Serial `t` toggles the timer in `pwm-demo.c`. While it is on, every target change (a typed `a` or a demo-sequence step) is timed in the 1 kHz ISR. "Settled" means the beam is within ±`SETTLE_BAND_DEG` (2°) and stays there for `SETTLE_HOLD_MS` (500 ms). The time is measured to when it entered the band, and it gives up after 10 s. A yellow line marks the step and a magenta line, labeled with the time, marks the settle point. Each result also prints as `[settle] ...` on serial and shows below the plots. Builds cleanly; not tested on hardware.
+- **Files touched:** `pwm-demo.c`, `CLAUDE_USAGE.md`
+- **Commits:** none
+
 ### 2026-10-29 — lab3 — 0–180 arm angle convention
 - **Asked:** make the VGA show 0–180 deg, with arm down = 0, sideways = 90, up = 180
 - **Result:** Added `armAngleFromAccel()` in `pwm-demo.c`: converts the raw atan2 angle (0–360) to the arm convention using two calibration constants, `RAW_ANGLE_AT_DOWN` and `ANGLE_DIRECTION`, and wraps to [-90, 270) so the arm's travel never crosses a seam. Gyro delta is multiplied by `ANGLE_DIRECTION` to match. Top-plot labels changed to 0/90/180 (the plot was already scaled 0–180 but labeled 180/360). Serial `a` command now accepts 0–180. Builds cleanly; constants still need calibrating on the rig, not hardware-tested.

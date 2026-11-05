@@ -8,6 +8,9 @@
  * commands over UART0 set the requested angle and the PID gains.
  * Holding the demo button turns the motor off; releasing it runs the
  * timed angle sequence 0 -> 30 -> -30 -> 0 degrees (5 s apart).
+ * Serial 't' toggles the settling-time timer: each new target is timed until
+ * the beam stays within a band around it, marked on the plot with a yellow
+ * (step) and magenta (settled) vertical line, and printed over serial.
  *
  * HARDWARE CONNECTIONS
  *  - GPIO 4 ---> PWM output
@@ -172,6 +175,48 @@ volatile bool sweep_mode = false;
 volatile bool sweep_start_req = false;  // set by button thread, consumed by ISR
 volatile int sweep_count = 0;           // samples recorded since sweep start
 
+// Settling-time timer, toggled with the serial 't' command.
+// While it is on, every change of the requested angle (a typed 'a' angle or
+// a demo-sequence step) starts a timer in the PWM ISR, so it has 1 ms
+// resolution. The beam counts as settled once it enters
+// +/- SETTLE_BAND_DEG of the target and stays there for SETTLE_HOLD_MS. The
+// reported settling time is from the step to the moment it ENTERED the band
+// for good (the hold only confirms it). Gives up after SETTLE_TIMEOUT_MS.
+// The plot marks the step with a YELLOW vertical line and the settle point
+// with a MAGENTA one labeled with the time; the result also prints on serial.
+#define SETTLE_BAND_DEG 2.0f
+#define SETTLE_HOLD_MS 500      // must stay > PLOT_INTERVAL (see marker code)
+#define SETTLE_TIMEOUT_MS 10000
+
+volatile bool timer_mode = false;
+
+// One marker flag per plot sample, so the lines scroll with the trace.
+#define MARK_NONE 0
+#define MARK_START 1
+#define MARK_SETTLE 2
+volatile uint8_t marker_plot[PLOT_WIDTH];
+volatile uint16_t marker_ms[PLOT_WIDTH];   // settling time for MARK_SETTLE
+
+// Timer state, owned by the ISR
+static bool timing = false;
+static float last_target = 0.0f;   // requested angle seen on the previous ISR
+static float timed_from, timed_target;
+static int timed_ms;               // ms since the step
+static int in_band_ms;             // ms continuously inside the band
+static int band_entry_ms;          // timed_ms when the beam entered the band
+static int band_entry_slot;        // plot slot where that entry is drawn
+static bool start_mark_pending = false;
+
+// Most recent result. settle_report_pending hands it to the status thread
+// for printing; the VGA shows it whenever have_settle_result is set.
+// report_ms: >= 0 settled, -1 timed out, -2 interrupted by a new target.
+#define SETTLE_TIMED_OUT (-1)
+#define SETTLE_INTERRUPTED (-2)
+volatile bool settle_report_pending = false;
+volatile bool have_settle_result = false;
+volatile float report_from, report_to;
+volatile int report_ms;
+
 // character array
 char screentext[40];
 
@@ -307,6 +352,49 @@ static void drawStatusText(void) {
     setCursor(LEFT_EDGE, 446);
     writeString(status_text);
     setTextSize(1);
+
+    // Settling timer status, under the command line
+    if (!timer_mode) {
+        snprintf(status_text, sizeof(status_text), "Settle timer OFF (t to enable)");
+    } else if (!have_settle_result) {
+        snprintf(status_text, sizeof(status_text),
+                 "Settle timer ON  band +/-%.1f deg, hold %d ms",
+                 (double)SETTLE_BAND_DEG, SETTLE_HOLD_MS);
+    } else if (report_ms >= 0) {
+        snprintf(status_text, sizeof(status_text),
+                 "Settle: %.1f -> %.1f deg in %.3f s (+/-%.1f deg)",
+                 (double)report_from, (double)report_to,
+                 report_ms / 1000.0, (double)SETTLE_BAND_DEG);
+    } else {
+        snprintf(status_text, sizeof(status_text), "Settle: %.1f -> %.1f deg %s",
+                 (double)report_from, (double)report_to,
+                 report_ms == SETTLE_TIMED_OUT ? "did not settle" : "interrupted");
+    }
+    setTextColor(MAGENTA);
+    setCursor(LEFT_EDGE, 466);
+    writeString(status_text);
+    setTextColor(WHITE);
+}
+
+// Vertical timer markers across both plots for one plot column.
+static void drawMarker(int x, int slot) {
+    uint8_t mark = marker_plot[slot];
+    if (mark == MARK_NONE) return;
+    char color = (mark == MARK_START) ? YELLOW : MAGENTA;
+    drawVLine(x, TOP_PLOT_BOTTOM - PLOT_HEIGHT, PLOT_HEIGHT + 1, color);
+    drawVLine(x, BOTTOM_PLOT_BOTTOM - PLOT_HEIGHT, PLOT_HEIGHT + 1, color);
+    if (mark == MARK_SETTLE) {
+        char label[12];
+        snprintf(label, sizeof(label), "%.2fs", marker_ms[slot] / 1000.0);
+        int label_x = x + 2;
+        if (label_x > 640 - 6 * (int)strlen(label))
+            label_x = 640 - 6 * (int)strlen(label);
+        setTextSize(1);
+        setTextColor(MAGENTA);
+        setCursor(label_x, TOP_PLOT_BOTTOM - PLOT_HEIGHT + 2);
+        writeString(label);
+        setTextColor(WHITE);
+    }
 }
 
 // PWM duty cycle
@@ -366,6 +454,65 @@ static PT_THREAD(protothread_locked_serialout(struct pt *pt)) {
 
 #define STATUS_INTERVAL_US 5000000ULL
 
+// Called from the ISR: publish a settling result for serial and the VGA.
+static void reportSettle(int ms) {
+    report_from = timed_from;
+    report_to = timed_target;
+    report_ms = ms;
+    have_settle_result = true;
+    settle_report_pending = true;
+}
+
+// Called once per PWM interrupt (1 ms), after the angle estimate is updated.
+static void updateSettleTimer(void) {
+    float target = requested_angle;
+
+    // Timer off, or motor off (button held / 'x'): nothing to time. Keep
+    // tracking the target so the release step (-90 -> 0) is still detected.
+    if (!timer_mode || motor_off) {
+        timing = false;
+        start_mark_pending = false;
+        last_target = target;
+        return;
+    }
+
+    if (target != last_target) {
+        // New step. A step that arrives before the last one settled ends it.
+        if (timing) reportSettle(SETTLE_INTERRUPTED);
+        timed_from = last_target;
+        timed_target = target;
+        last_target = target;
+        timing = true;
+        timed_ms = 0;
+        in_band_ms = 0;
+        start_mark_pending = true;   // drawn on the next plot sample
+        return;
+    }
+    if (!timing) return;
+
+    timed_ms++;
+    if (fabsf(fix2float15(complementary_angle) - timed_target) <= SETTLE_BAND_DEG) {
+        if (in_band_ms == 0) {
+            band_entry_ms = timed_ms;
+            band_entry_slot = head;  // slot of the next plot sample
+        }
+        if (++in_band_ms >= SETTLE_HOLD_MS) {
+            // Confirmed. The entry slot was written (and its marker cleared)
+            // within PLOT_INTERVAL ms of entry, so it is safe to mark now.
+            timing = false;
+            marker_ms[band_entry_slot] = (uint16_t)band_entry_ms;
+            marker_plot[band_entry_slot] = MARK_SETTLE;
+            reportSettle(band_entry_ms);
+        }
+    } else {
+        in_band_ms = 0;  // left the band: the settle point must come later
+        if (timed_ms >= SETTLE_TIMEOUT_MS) {
+            timing = false;
+            reportSettle(SETTLE_TIMED_OUT);
+        }
+    }
+}
+
 // PWM interrupt service routine
 void on_pwm_wrap() {
     // Clear the interrupt flag that brought us here
@@ -422,7 +569,7 @@ void on_pwm_wrap() {
     }
     /*========== PID Control End ==============================*/
 
-    // Low-pass the motor command for display (1/4 per sample)
+    // Low-pass the motor command for display (1/16 per sample)
     filtered_control = filtered_control
                      + ((int2fix15(control) - filtered_control) >> 4);
     
@@ -434,7 +581,10 @@ void on_pwm_wrap() {
         sweep_count = 0;
         throttle = PLOT_INTERVAL - 1;
         sweep_mode = true;
+        in_band_ms = 0;  // any recorded band-entry slot is stale after the reset
     }
+
+    updateSettleTimer();
 
     // Increment drawspeed controller
     throttle += 1;
@@ -447,6 +597,8 @@ void on_pwm_wrap() {
         angle_plot[head] = complementary_angle;
         target_plot[head] = requested_angle;
         control_plot[head] = filtered_control;
+        marker_plot[head] = start_mark_pending ? MARK_START : MARK_NONE;
+        start_mark_pending = false;
 
         // Move the pointer to the oldest data
         head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1);
@@ -503,6 +655,8 @@ static PT_THREAD (protothread_draw(struct pt *pt)) {
         drawTimeAxis(sweep, n);
 
         for (i = 0; i < n; i++) {
+            // Timer markers underneath the traces
+            drawMarker(LEFT_EDGE + i, start);
             // Target first so the measured trace draws on top where they overlap
             drawPixel(LEFT_EDGE + i, plotY(TOP_PLOT_BOTTOM,
                 target_plot[start], ANGLE_MIN, ANGLE_MAX), RED);
@@ -526,16 +680,28 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
     static volatile float *gain;
     while(1) {
         sprintf(pt_serial_out_buffer,
-                "command (a = angle, p/i/d = gains, x = motor off, s = start sequence): ");
+                "command (a = angle, p/i/d = gains, x = motor off, s = start sequence, t = settle timer): ");
         serial_write_locked;
         serial_read;
         if (sscanf(pt_serial_in_buffer, " %c %c", &classifier, &extra_input) != 1) {
-            sprintf(pt_serial_out_buffer, "enter a, p, i, d, x, or s\r\n");
+            sprintf(pt_serial_out_buffer, "enter a, p, i, d, x, s, or t\r\n");
             serial_write_locked;
             continue;
         }
 
-        if (classifier == 'x') {
+        if (classifier == 't') {
+            have_settle_result = false;
+            timer_mode = !timer_mode;
+            if (timer_mode) {
+                snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
+                         "settle timer ON: each new angle is timed until within "
+                         "+/-%.1f deg for %d ms\r\n",
+                         (double)SETTLE_BAND_DEG, SETTLE_HOLD_MS);
+            } else {
+                sprintf(pt_serial_out_buffer, "settle timer OFF\r\n");
+            }
+            serial_write_locked;
+        } else if (classifier == 'x') {
             // TEMP: virtual button press
             press_req = true;
             sprintf(pt_serial_out_buffer, "motor off (type s to start the sequence)\r\n");
@@ -579,7 +745,7 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
             }
             serial_write_locked;
         } else {
-            sprintf(pt_serial_out_buffer, "unknown command; enter a, p, i, or d\r\n");
+            sprintf(pt_serial_out_buffer, "unknown command; enter a, p, i, d, x, s, or t\r\n");
             serial_write_locked;
         }
     }
@@ -596,22 +762,50 @@ static PT_THREAD(protothread_status(struct pt *pt)) {
     static float requested_snapshot;
     static int duty_snapshot;
     static uint32_t irq_state;
+    static bool is_settle_report;
+    static float from_snapshot, to_snapshot;
+    static int ms_snapshot;
     next_status_us = time_us_64() + STATUS_INTERVAL_US;
 
     while (1) {
-        PT_YIELD_UNTIL(pt, time_us_64() >= next_status_us);
+        // Settling results print as soon as the ISR posts them.
+        PT_YIELD_UNTIL(pt, settle_report_pending || time_us_64() >= next_status_us);
         // Only the snapshots need interrupts disabled, not formatting or UART I/O.
         irq_state = save_and_disable_interrupts();
-        filtered_snapshot = complementary_angle;
-        requested_snapshot = requested_angle;
-        duty_snapshot = old_control; // Last value actually applied by the PWM ISR.
+        is_settle_report = settle_report_pending;
+        if (is_settle_report) {
+            settle_report_pending = false;
+            from_snapshot = report_from;
+            to_snapshot = report_to;
+            ms_snapshot = report_ms;
+        } else {
+            filtered_snapshot = complementary_angle;
+            requested_snapshot = requested_angle;
+            duty_snapshot = old_control; // Last value actually applied by the PWM ISR.
+        }
         restore_interrupts(irq_state);
-        snprintf(status_text, sizeof(status_text),
-                 "\r\nfiltered=%.1f deg (%.2f rad)  requested=%.1f deg (%.2f rad)  duty=%d/%d\r\n",
-                 (double)fix2float15(filtered_snapshot),
-                 (double)(fix2float15(filtered_snapshot) * DEG_TO_RAD),
-                 (double)requested_snapshot, (double)(requested_snapshot * DEG_TO_RAD),
-                 duty_snapshot, WRAPVAL);
+        if (is_settle_report && ms_snapshot >= 0) {
+            snprintf(status_text, sizeof(status_text),
+                     "\r\n[settle] %.1f -> %.1f deg (step %+.1f): settled in %.3f s "
+                     "(band +/-%.1f deg, hold %d ms)\r\n",
+                     (double)from_snapshot, (double)to_snapshot,
+                     (double)(to_snapshot - from_snapshot), ms_snapshot / 1000.0,
+                     (double)SETTLE_BAND_DEG, SETTLE_HOLD_MS);
+        } else if (is_settle_report) {
+            snprintf(status_text, sizeof(status_text),
+                     "\r\n[settle] %.1f -> %.1f deg: %s\r\n",
+                     (double)from_snapshot, (double)to_snapshot,
+                     ms_snapshot == SETTLE_TIMED_OUT
+                         ? "did not settle within the timeout"
+                         : "interrupted by a new target before settling");
+        } else {
+            snprintf(status_text, sizeof(status_text),
+                     "\r\nfiltered=%.1f deg (%.2f rad)  requested=%.1f deg (%.2f rad)  duty=%d/%d\r\n",
+                     (double)fix2float15(filtered_snapshot),
+                     (double)(fix2float15(filtered_snapshot) * DEG_TO_RAD),
+                     (double)requested_snapshot, (double)(requested_snapshot * DEG_TO_RAD),
+                     duty_snapshot, WRAPVAL);
+        }
 
         PT_YIELD_UNTIL(pt, !serial_tx_busy);
         serial_tx_busy = true;
@@ -620,9 +814,11 @@ static PT_THREAD(protothread_status(struct pt *pt)) {
             uart_putc(UART_ID, status_text[send_index]);
         }
         serial_tx_busy = false;
-        next_status_us += STATUS_INTERVAL_US;
-        if (next_status_us <= time_us_64()) {
-            next_status_us = time_us_64() + STATUS_INTERVAL_US;
+        if (!is_settle_report) {
+            next_status_us += STATUS_INTERVAL_US;
+            if (next_status_us <= time_us_64()) {
+                next_status_us = time_us_64() + STATUS_INTERVAL_US;
+            }
         }
     }
     PT_END(pt);
@@ -673,11 +869,14 @@ static PT_THREAD(protothread_button(struct pt *pt)) {
             } else {
                 // Released: time = 0, target horizontal, motor back on.
                 release_req = false;
+                // motor_off goes false BEFORE the target changes, so the
+                // settle timer (which ignores steps while the motor is off)
+                // sees the -90 -> 0 release step.
+                motor_off = false;
                 requested_angle = SEQ_HORIZONTAL;
                 seq_start_us = now;
                 seq_step = 1;
                 sequence_active = true;
-                motor_off = false;
                 sweep_start_req = true;  // plot t = 0 at the left edge
             }
         }
