@@ -54,9 +54,9 @@
 // PID control parameters (PWM counts; angle error is in degrees,
 // angular rate for the D term is in deg/s).
 #define STARTUP_OFFSET 3000
-#define KP 100.0f
-#define KI 50.0f
-#define KD 0.0f
+#define KP 1.0f
+#define KI 1.0f
+#define KD 1.0f
 #define CONTROL_MIN 1000.0f
 #define CONTROL_MAX 3500.0f
 
