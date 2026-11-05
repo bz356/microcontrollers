@@ -58,7 +58,7 @@
 #define KI 50.0f
 #define KD 0.0f
 #define CONTROL_MIN 1000.0f
-#define CONTROL_MAX 4500.0f
+#define CONTROL_MAX 3500.0f
 
 // GPIO we're using for PWM
 #define PWM_OUT 4
@@ -122,6 +122,14 @@ volatile bool motor_off = false;
 // True while the timed demo sequence is running. A serial angle command
 // clears it so the user's angle is not overwritten by the next step.
 volatile bool sequence_active = false;
+
+// TEMP: serial stand-ins for the demo button until a physical one is wired.
+// The serial thread sets these and the button thread consumes them, so all
+// sequence state is still owned by protothread_button.
+//   'x' -> same as pressing the button (motor off, beam hangs down)
+//   's' -> same as releasing it (motor on, start the 15 s sequence)
+volatile bool press_req = false;
+volatile bool release_req = false;
 
 // PID gains, set from the serial console.
 volatile float kp = KP;
@@ -441,16 +449,26 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
     static volatile float *gain;
     while(1) {
         sprintf(pt_serial_out_buffer,
-                "command (a = requested angle, p = Kp, i = Ki, d = Kd): ");
+                "command (a = angle, p/i/d = gains, x = motor off, s = start sequence): ");
         serial_write_locked;
         serial_read;
         if (sscanf(pt_serial_in_buffer, " %c %c", &classifier, &extra_input) != 1) {
-            sprintf(pt_serial_out_buffer, "enter a, p, i, or d\r\n");
+            sprintf(pt_serial_out_buffer, "enter a, p, i, d, x, or s\r\n");
             serial_write_locked;
             continue;
         }
 
-        if (classifier == 'p' || classifier == 'i' || classifier == 'd') {
+        if (classifier == 'x') {
+            // TEMP: virtual button press
+            press_req = true;
+            sprintf(pt_serial_out_buffer, "motor off (type s to start the sequence)\r\n");
+            serial_write_locked;
+        } else if (classifier == 's') {
+            // TEMP: virtual button release
+            release_req = true;
+            sprintf(pt_serial_out_buffer, "sequence started: 0 -> 30 -> -30 -> 0 deg, 5 s apart\r\n");
+            serial_write_locked;
+        } else if (classifier == 'p' || classifier == 'i' || classifier == 'd') {
             gain = (classifier == 'p') ? &kp : (classifier == 'i') ? &ki : &kd;
             snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
                      "K%c (>= 0, currently %.3f): ", classifier, (double)*gain);
@@ -473,6 +491,7 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
             if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
                 isfinite(angle_in) && angle_in >= -90.0f && angle_in <= 90.0f) {
                 sequence_active = false;  // a typed angle overrides the demo sequence
+                motor_off = false;        // TEMP: 'x' latches off, so a typed angle turns it back on
                 requested_angle = angle_in;
                 snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
                          "requested angle set to %.1f deg (%.2f rad)\r\n",
@@ -559,13 +578,22 @@ static PT_THREAD(protothread_button(struct pt *pt)) {
 
         if (same_count >= BUTTON_STABLE_READS && raw != stable_pressed) {
             stable_pressed = raw;
-            if (stable_pressed) {
+            if (stable_pressed) press_req = true;
+            else                release_req = true;
+        }
+
+        // Physical button edges and TEMP serial 'x'/'s' commands both land here.
+        if (press_req || release_req) {
+            if (press_req) {
+                press_req = false;
+                release_req = false;
                 // Pressed: motor off, cancel any sequence in progress.
                 sequence_active = false;
                 requested_angle = SEQ_DOWN;
                 motor_off = true;
             } else {
                 // Released: time = 0, target horizontal, motor back on.
+                release_req = false;
                 requested_angle = SEQ_HORIZONTAL;
                 seq_start_us = now;
                 seq_step = 1;
