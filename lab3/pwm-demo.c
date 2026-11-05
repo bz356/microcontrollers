@@ -165,9 +165,9 @@ volatile int head = 0;
 // Plot modes:
 //  - rolling (default): circular buffer, newest sample at the right edge
 //  - sweep: started when the demo sequence starts. The buffer is restarted
-//    so t = 0 is the left edge, fills left to right, then stops recording
-//    and holds the whole sequence on screen until the button is pressed
-//    (or 'x' / a typed angle), which returns to rolling.
+//    so t = 0 is the left edge and fills left to right; once the screen is
+//    full (20 s) it switches back to rolling automatically. Pressing the
+//    button, 'x', or a typed angle also returns to rolling early.
 volatile bool sweep_mode = false;
 volatile bool sweep_start_req = false;  // set by button thread, consumed by ISR
 volatile int sweep_count = 0;           // samples recorded since sweep start
@@ -268,20 +268,15 @@ static void drawTimeAxis(bool sweep, int count) {
         writeString(screentext);
     }
 
-    // Mode readout, right of the motor-command title
+    // Sequence timer, right of the motor-command title (sweep mode only)
     if (sweep) {
-        if (count >= PLOT_WIDTH)
-            sprintf(screentext, "SEQUENCE (held)");
-        else
-            sprintf(screentext, "SEQUENCE t=%.1fs",
-                    (double)(count * PLOT_INTERVAL) / 1000.0);
+        sprintf(screentext, "SEQUENCE t=%.1fs",
+                (double)(count * PLOT_INTERVAL) / 1000.0);
         setTextColor(YELLOW);
-    } else {
-        sprintf(screentext, "LIVE (last %ds)", PLOT_SPAN_MS / 1000);
+        setCursor(LEFT_EDGE + PLOT_WIDTH - 6 * (int)strlen(screentext), 268);
+        writeString(screentext);
+        setTextColor(WHITE);
     }
-    setCursor(LEFT_EDGE + PLOT_WIDTH - 6 * (int)strlen(screentext), 268);
-    writeString(screentext);
-    setTextColor(WHITE);
 }
 
 static void drawStatusText(void) {
@@ -448,17 +443,19 @@ void on_pwm_wrap() {
         // Zero drawspeed controller
         throttle = 0;
 
-        // In sweep mode, stop recording once the screen is full so the
-        // whole sequence stays visible.
-        if (!sweep_mode || sweep_count < PLOT_WIDTH) {
-            // Replace oldest data with new sample
-            angle_plot[head] = complementary_angle;
-            target_plot[head] = requested_angle;
-            control_plot[head] = filtered_control;
+        // Replace oldest data with new sample
+        angle_plot[head] = complementary_angle;
+        target_plot[head] = requested_angle;
+        control_plot[head] = filtered_control;
 
-            // Move the pointer to the oldest data
-            head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1);
-            if (sweep_mode) sweep_count++;
+        // Move the pointer to the oldest data
+        head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1);
+
+        // Once the sweep fills the screen, drop back to the rolling plot.
+        // head has wrapped to 0, so the rolling view continues seamlessly
+        // from the sweep's data.
+        if (sweep_mode && ++sweep_count >= PLOT_WIDTH) {
+            sweep_mode = false;
         }
     }
     // Motor Code 
