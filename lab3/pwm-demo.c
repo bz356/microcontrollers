@@ -56,10 +56,10 @@
 
 // PID control parameters (PWM counts; angle error is in degrees,
 // angular rate for the D term is in deg/s).
-#define STARTUP_OFFSET 3000
-#define KP 1.0f
-#define KI 1.0f
-#define KD 1.0f
+#define STARTUP_OFFSET 1000
+#define KP 120.0f
+#define KI 10.0f
+#define KD 25.0f
 #define CONTROL_MIN 1000.0f
 #define CONTROL_MAX 3500.0f
 
@@ -955,6 +955,9 @@ int main() {
     // This section configures the period of the PWM signals
     pwm_set_wrap(slice_num, WRAPVAL);
     pwm_set_clkdiv(slice_num, CLKDIV);
+
+    // Invert channel A for the optoisolated motor circuit.
+    pwm_set_output_polarity(slice_num, true, false);
 
     // This sets duty cycle
     pwm_set_chan_level(slice_num, PWM_CHAN_A, STARTUP_OFFSET);
