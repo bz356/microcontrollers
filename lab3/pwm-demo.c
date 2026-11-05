@@ -957,7 +957,7 @@ int main() {
     pwm_set_clkdiv(slice_num, CLKDIV);
 
     // Invert channel A for the optoisolated motor circuit.
-    pwm_set_output_polarity(slice_num, true, false);
+    //pwm_set_output_polarity(slice_num, true, false);
 
     // This sets duty cycle
     pwm_set_chan_level(slice_num, PWM_CHAN_A, STARTUP_OFFSET);
