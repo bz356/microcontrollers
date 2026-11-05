@@ -375,7 +375,7 @@ void on_pwm_wrap() {
 
     // Low-pass the motor command for display (1/4 per sample)
     filtered_control = filtered_control
-                     + ((int2fix15(control) - filtered_control) >> 2);
+                     + ((int2fix15(control) - filtered_control) >> 4);
     
     // Increment drawspeed controller
     throttle += 1;
