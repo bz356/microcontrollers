@@ -347,8 +347,10 @@ void on_pwm_wrap() {
     // Flipped with ANGLE_DIRECTION so it matches the arm angle's sign.
     gyro_angle_delta = multfix15(gyro[1], float2fix15(CONTROL_DT)) * ANGLE_DIRECTION;
 
-    // Complementary angle (degrees - 15.16 fixed point)
-    complementary_angle = multfix15(complementary_angle - gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
+    // Complementary angle (degrees - 15.16 fixed point).
+    // Added, not subtracted: for rotation about the sensor Y axis,
+    // atan2(-ax, az) and gyro[1] increase together.
+    complementary_angle = multfix15(complementary_angle + gyro_angle_delta, zeropt999) + multfix15(accel_angle, zeropt001);
 
     /* ========================== PID Control ==================*/
     if (motor_off) {
@@ -360,8 +362,8 @@ void on_pwm_wrap() {
         float correction = doPid(
         requested_angle,
         fix2float15(complementary_angle),
-        // Same sign as the complementary filter, which subtracts gyro_angle_delta
-        -fix2float15(gyro[1]) * ANGLE_DIRECTION
+        // Same sign as the complementary filter, which adds gyro_angle_delta
+        fix2float15(gyro[1]) * ANGLE_DIRECTION
         );
 
         // Holding command plus the PID correction.
