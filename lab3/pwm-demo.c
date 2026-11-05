@@ -90,7 +90,8 @@
 // Place the plots
 #define TOP_PLOT_BOTTOM 230
 #define BOTTOM_PLOT_BOTTOM 430
-#define PLOT_WIDTH 530
+// Nearly the full 640 px screen width (81 + 556 = 637)
+#define PLOT_WIDTH 556
 
 // Arrays in which raw measurements will be stored
 fix15 acceleration[3], gyro[3];
@@ -161,13 +162,25 @@ fix15 control_plot[PLOT_WIDTH];    // low-passed motor command (0..WRAPVAL)
 // Pointer to head of buffer
 volatile int head = 0;
 
+// Plot modes:
+//  - rolling (default): circular buffer, newest sample at the right edge
+//  - sweep: started when the demo sequence starts. The buffer is restarted
+//    so t = 0 is the left edge, fills left to right, then stops recording
+//    and holds the whole sequence on screen until the button is pressed
+//    (or 'x' / a typed angle), which returns to rolling.
+volatile bool sweep_mode = false;
+volatile bool sweep_start_req = false;  // set by button thread, consumed by ISR
+volatile int sweep_count = 0;           // samples recorded since sweep start
+
 // character array
 char screentext[40];
 
 // draw speed: one plot sample every PLOT_INTERVAL PWM interrupts (1 ms each),
-// so the 530-sample plot spans 530 * 31 ms = 16.4 s, long enough to show
-// the whole 15 s button demo sequence on one screen
-#define PLOT_INTERVAL 31
+// so the 556-sample plot spans 556 * 36 ms = 20.0 s: the whole 15 s demo
+// sequence plus 5 s of settling after the final step back to horizontal
+#define PLOT_INTERVAL 36
+#define PLOT_SPAN_MS (PLOT_WIDTH * PLOT_INTERVAL)
+#define TICK_MS 5000
 
 // Some macros for max/min/abs
 #define min(a,b) (((a)<(b)) ? (a):(b))
@@ -230,6 +243,45 @@ static int plotY(int plot_bottom, float value, float min_v, float max_v) {
     if (frac < 0.0f) frac = 0.0f;
     if (frac > 1.0f) frac = 1.0f;
     return plot_bottom - (int)(PLOT_HEIGHT * frac);
+}
+
+// Time ticks every TICK_MS under both plots. In sweep mode they count up
+// from the sequence start at the left edge; in rolling mode they count back
+// from "now" at the right edge.
+static void drawTimeAxis(bool sweep, int count) {
+    int t_ms, x;
+    setTextSize(1);
+    setTextColor(WHITE);
+    for (t_ms = 0; t_ms <= PLOT_SPAN_MS; t_ms += TICK_MS) {
+        int offset = t_ms / PLOT_INTERVAL;
+        if (offset >= PLOT_WIDTH) offset = PLOT_WIDTH - 1;
+        x = sweep ? LEFT_EDGE + offset : LEFT_EDGE + PLOT_WIDTH - 1 - offset;
+        drawVLine(x, TOP_PLOT_BOTTOM + 1, 4, CYAN);
+        drawVLine(x, BOTTOM_PLOT_BOTTOM + 1, 4, CYAN);
+        if (sweep) sprintf(screentext, "%ds", t_ms / 1000);
+        else       sprintf(screentext, t_ms == 0 ? "now" : "-%ds", t_ms / 1000);
+        // Center-ish the label, keeping it on screen
+        int label_x = x - 6;
+        if (label_x > 640 - 6 * (int)strlen(screentext))
+            label_x = 640 - 6 * (int)strlen(screentext);
+        setCursor(label_x, BOTTOM_PLOT_BOTTOM + 6);
+        writeString(screentext);
+    }
+
+    // Mode readout, right of the motor-command title
+    if (sweep) {
+        if (count >= PLOT_WIDTH)
+            sprintf(screentext, "SEQUENCE (held)");
+        else
+            sprintf(screentext, "SEQUENCE t=%.1fs",
+                    (double)(count * PLOT_INTERVAL) / 1000.0);
+        setTextColor(YELLOW);
+    } else {
+        sprintf(screentext, "LIVE (last %ds)", PLOT_SPAN_MS / 1000);
+    }
+    setCursor(LEFT_EDGE + PLOT_WIDTH - 6 * (int)strlen(screentext), 268);
+    writeString(screentext);
+    setTextColor(WHITE);
 }
 
 static void drawStatusText(void) {
@@ -379,6 +431,16 @@ void on_pwm_wrap() {
     filtered_control = filtered_control
                      + ((int2fix15(control) - filtered_control) >> 4);
     
+    // Sequence just started: restart the buffer so t = 0 is the left edge,
+    // and take the first sample on this interrupt.
+    if (sweep_start_req) {
+        sweep_start_req = false;
+        head = 0;
+        sweep_count = 0;
+        throttle = PLOT_INTERVAL - 1;
+        sweep_mode = true;
+    }
+
     // Increment drawspeed controller
     throttle += 1;
     // Maintain a circular buffer for display
@@ -386,14 +448,18 @@ void on_pwm_wrap() {
         // Zero drawspeed controller
         throttle = 0;
 
-        // Replace oldest data with new sample
-        angle_plot[head] = complementary_angle;
-        target_plot[head] = requested_angle;
-        control_plot[head] = filtered_control;
+        // In sweep mode, stop recording once the screen is full so the
+        // whole sequence stays visible.
+        if (!sweep_mode || sweep_count < PLOT_WIDTH) {
+            // Replace oldest data with new sample
+            angle_plot[head] = complementary_angle;
+            target_plot[head] = requested_angle;
+            control_plot[head] = filtered_control;
 
-        // Move the pointer to the oldest data
-        head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1);
-
+            // Move the pointer to the oldest data
+            head = ((head+1) == PLOT_WIDTH) ? 0 : (head + 1);
+            if (sweep_mode) sweep_count++;
+        }
     }
     // Motor Code 
     // Update duty cycle
@@ -408,6 +474,8 @@ static PT_THREAD (protothread_draw(struct pt *pt)) {
 
     static int start;
     static int i;
+    static int n;
+    static bool sweep;
 
     // Draw axes
     drawAxes();
@@ -425,9 +493,19 @@ static PT_THREAD (protothread_draw(struct pt *pt)) {
         drawAxes();
         drawStatusText();
 
-        // Plot data oldest-->newest
-        start = head;
-        for (i = 0; i < PLOT_WIDTH; i++) {
+        // Sweep: samples 0..count-1 from the left edge (t = 0 = sequence
+        // start). Rolling: the full circular buffer, oldest-->newest.
+        sweep = sweep_mode;
+        if (sweep) {
+            n = min(sweep_count, PLOT_WIDTH);
+            start = 0;
+        } else {
+            n = PLOT_WIDTH;
+            start = head;
+        }
+        drawTimeAxis(sweep, n);
+
+        for (i = 0; i < n; i++) {
             // Target first so the measured trace draws on top where they overlap
             drawPixel(LEFT_EDGE + i, plotY(TOP_PLOT_BOTTOM,
                 target_plot[start], ANGLE_MIN, ANGLE_MAX), RED);
@@ -493,6 +571,7 @@ static PT_THREAD (protothread_serial(struct pt *pt)) {
             if (sscanf(pt_serial_in_buffer, "%f %c", &angle_in, &extra_input) == 1 &&
                 isfinite(angle_in) && angle_in >= -90.0f && angle_in <= 90.0f) {
                 sequence_active = false;  // a typed angle overrides the demo sequence
+                sweep_mode = false;       // back to the live rolling plot
                 motor_off = false;        // TEMP: 'x' latches off, so a typed angle turns it back on
                 requested_angle = angle_in;
                 snprintf(pt_serial_out_buffer, sizeof(pt_serial_out_buffer),
@@ -593,6 +672,7 @@ static PT_THREAD(protothread_button(struct pt *pt)) {
                 sequence_active = false;
                 requested_angle = SEQ_DOWN;
                 motor_off = true;
+                sweep_mode = false;   // live rolling plot while held
             } else {
                 // Released: time = 0, target horizontal, motor back on.
                 release_req = false;
@@ -601,6 +681,7 @@ static PT_THREAD(protothread_button(struct pt *pt)) {
                 seq_step = 1;
                 sequence_active = true;
                 motor_off = false;
+                sweep_start_req = true;  // plot t = 0 at the left edge
             }
         }
 
