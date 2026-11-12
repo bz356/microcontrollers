@@ -56,12 +56,12 @@
 
 // PID control parameters (PWM counts; angle error is in degrees,
 // angular rate for the D term is in deg/s).
-#define STARTUP_OFFSET 1000
+#define STARTUP_OFFSET 3000
 #define KP 120.0f
 #define KI 10.0f
 #define KD 25.0f
-#define CONTROL_MIN 1000.0f
-#define CONTROL_MAX 3500.0f
+#define CONTROL_MIN 500.0f
+#define CONTROL_MAX 3400.0f
 
 // GPIO we're using for PWM
 #define PWM_OUT 4
@@ -184,7 +184,7 @@ volatile int sweep_count = 0;           // samples recorded since sweep start
 // for good (the hold only confirms it). Gives up after SETTLE_TIMEOUT_MS.
 // The plot marks the step with a YELLOW vertical line and the settle point
 // with a MAGENTA one labeled with the time; the result also prints on serial.
-#define SETTLE_BAND_DEG 2.0f
+#define SETTLE_BAND_DEG 3.0f
 #define SETTLE_HOLD_MS 500      // must stay > PLOT_INTERVAL (see marker code)
 #define SETTLE_TIMEOUT_MS 10000
 
